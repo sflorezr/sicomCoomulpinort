@@ -15,6 +15,7 @@ import javax.xml.bind.DatatypeConverter;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.json.JSONTokener;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
@@ -24,6 +25,7 @@ import com.sergio.prueba.ConnectionFirebird;
 import okhttp3.*;
 
 public class consularVentasEDSPalustre {
+    private static final String URLTNS="https://api.tns.co";
     private static ConnectionFirebird Tns=null;
     private static String url="";
     private static String usuario="";
@@ -34,7 +36,6 @@ public class consularVentasEDSPalustre {
     private static String token="";
     private static String tokenTNS="";
     private static JSONObject obj = new JSONObject();
-    private static JSONObject objRespues = new JSONObject();
     private static JSONObject sale = new JSONObject();
 
     private static JSONArray productos = new JSONArray();
@@ -131,6 +132,9 @@ public class consularVentasEDSPalustre {
             Tns.actualizar(sqlString);
             sqlString="insert into varios (contenido,variab) values('0','CANTIDADTERPELSUBIDA')";  
             Tns.actualizar(sqlString);    
+            if(!LoginTNS()){
+                return;
+            }
             for (int i = 0; i < obj.getJSONArray("data").length(); i++) {
                 sale=obj.getJSONArray("data").getJSONObject(i); 
                 //System.out.println(String.valueOf(i)+" - "+sale.getString("consecutivo_factura"));
@@ -196,7 +200,7 @@ public class consularVentasEDSPalustre {
                     JsonObject itemDescuento = new JsonObject();
                     if(!matidString.equals("00")){
                         precioBaseFloat=sale.getFloat("valor_venta_total")/sale.getFloat("cantidad");
-                       venta.addProperty("codPrefijo", prefijo); 
+                       venta.addProperty("codigoPrefijo", prefijo); 
                        venta.addProperty("numero", numero);
                        venta.addProperty("fecha", fechaVentaString);  
                        venta.addProperty("codTercero", teridString);    
@@ -205,7 +209,7 @@ public class consularVentasEDSPalustre {
                        venta.addProperty("codFormaPago", formapago);    
                        venta.addProperty("codBanco", "00");    
                        venta.addProperty("fechaVence", fechaVentaString);
-                       venta.addProperty("plazoDias", "0");
+                       venta.addProperty("plazoDias", 0);
                        venta.addProperty("observacion", observaciones);
                        itempedido.addProperty("codMat",matidString);
                        itempedido.addProperty("codBodega", "00");
@@ -213,20 +217,20 @@ public class consularVentasEDSPalustre {
                        itempedido.addProperty("codColor", "");
                        itempedido.addProperty("cantidad", sale.getFloat("cantidad"));
                        itempedido.addProperty("tipoUnidad", "D");
-                       itempedido.addProperty("descuento", "0");
+                       itempedido.addProperty("descuento", 0);
                        itempedido.addProperty("centrosCostos", "00");
-                       itempedido.addProperty("porcIva", "0");
+                       itempedido.addProperty("porcIva", 0);
                        itempedido.addProperty("valor", precioBaseFloat);
-                       itempedido.addProperty("impConsumo", "0");
+                       itempedido.addProperty("impConsumo", 0);
                        itempedido.addProperty("observacion", "");
                        itemsPedido.add(itempedido);
-                       venta.add("itemsPedido", itemsPedido);
-                       itemformapago.addProperty("codFormaPago", "CO");
+                       venta.add("detallePedido", itemsPedido);
+                       itemformapago.addProperty("codigoFormaPago", "CO");
                        itemformapago.addProperty("plazoDias", "0");
                        itemformapago.addProperty("fechaVencimiento", fechaVentaString);
                        itemformapago.addProperty("valor", sale.get("valor_venta_total").toString());
                        itemsFormaPago.add(itemformapago);
-                       venta.add("itemsFormaPago", itemsFormaPago);
+                       venta.add("detalleFormaPago", itemsFormaPago);
                        itemDescuento.addProperty("codconcepto", "00");
                        itemDescuento.addProperty("valordto", "0");
                        itemDescuento.addProperty("baseretd", "0");
@@ -239,25 +243,21 @@ public class consularVentasEDSPalustre {
                        Gson gson = new GsonBuilder().setPrettyPrinting().create();
                        json = gson.toJson(venta);
                       // System.out.println(json);
-                       OkHttpClient client2 =new OkHttpClient().newBuilder().connectTimeout(240, TimeUnit.SECONDS).readTimeout(240, TimeUnit.SECONDS).build();
-                       OkHttpClient.Builder builder2 = new OkHttpClient.Builder();
-                       builder2 = configureToIgnoreCertificate(builder2);
-                       MediaType mediaType2= MediaType.parse("application/json");
                        RequestBody body = RequestBody.create(mediaType, json);
-                       builder2.connectTimeout(5, TimeUnit.MINUTES).writeTimeout(5, TimeUnit.MINUTES).readTimeout(5, TimeUnit.MINUTES);
-                       client2=builder2.build();
                        //if(sale.getString("tipo_factura").equals("FE")) {
 
-                            Request request2 = new Request.Builder().url("https://api.tns.co/api/Ventas/Crear?empresa="+empresaTNS+"&usuario="+usuarioTNS+"&password="+passwordTNS+"&tnsapitoken="+tokenTNS+"&codsucursal=00").method("POST", body).addHeader("Content-Type", "application/json").addHeader("Accept", "application/json").build();
-                            Response response2 = client2.newCall(request2).execute();
+                            HttpUrl urlVenta=HttpUrl.parse(URLTNS+"/v2/facturacion/Ventas/Crear").newBuilder()
+                                .addQueryParameter("codigosucursal", "00").build();
+                            Response response2 = EjecutarTNS(urlVenta, body);
                             System.out.println(response2.code());
-                            if (response2.code()!=200){
-                                String respuesta2=response2.body().string();
-                                respuesta2=respuesta2.replaceAll("\\\\","");
-                                respuesta2=respuesta2.substring(1);
-                                respuesta2=respuesta2.substring(0, respuesta2.length()-1);
-                                objRespues =new JSONObject(respuesta2);
-                                GuardarLog(objRespues.getJSONObject("results").getString("response")+ " en la factura "+prefijo+numero);
+                            JSONObject objRespues=LeerRespuestaTNS(response2.body().string());
+                            JSONObject datos=objRespues.optJSONObject("data");
+                            if (response2.code()!=200 || !objRespues.optBoolean("status") || (datos!=null && !datos.optBoolean("success"))){
+                                String mensaje=objRespues.optString("message");
+                                if(datos!=null && !datos.optString("response").isEmpty()){
+                                    mensaje=datos.optString("response");
+                                }
+                                GuardarLog(mensaje+ " en la factura "+prefijo+numero);
                             }
                        // }
                        
@@ -290,33 +290,21 @@ public class consularVentasEDSPalustre {
         JSONObject rta = new JSONObject();
         JSONArray Articulos = new JSONArray();
         JSONObject Articulo = new JSONObject();
-        OkHttpClient client =new OkHttpClient();
-        OkHttpClient.Builder builder = new OkHttpClient.Builder();
-        builder = configureToIgnoreCertificate(builder);
-        builder.connectTimeout(5, TimeUnit.MINUTES).writeTimeout(5, TimeUnit.MINUTES).readTimeout(5, TimeUnit.MINUTES);
-        MediaType mediaType = MediaType.parse("application/json");
-        client=builder.build();
-        Request request = null;        
-        request=new Request.Builder().url("https://api.tns.co/api/Material/Listar?empresa="+empresaTNS+"&filtro="+nombre+"&usuario="+usuarioTNS+"&password="+passwordTNS+"&tnsapitoken="+tokenTNS+"&codsuc=00").get()    
-        .addHeader("Authorization", "Bearer "+token)
-        .addHeader("Content-Type", "application/json")
-        .addHeader("Accept", "application/json").build();
-        Response response = client.newCall(request).execute();
-        String respuesta=response.body().string();        
-        respuesta=respuesta.replaceAll("\\\\","");
-        respuesta=respuesta.substring(1);
-        respuesta=respuesta.substring(0, respuesta.length() - 1);
-        rta=new JSONObject(respuesta);        
+        HttpUrl urlMaterial=HttpUrl.parse(URLTNS+"/v2/tablas/Material/Listar").newBuilder()
+            .addQueryParameter("codigosucursal", "00")
+            .addQueryParameter("filtro", nombre).build();
+        Response response = EjecutarTNS(urlMaterial, null);
+        rta=LeerRespuestaTNS(response.body().string());
         try {
-            Articulos=rta.getJSONArray("results");
+            Articulos=rta.getJSONArray("data");
             for (int i = 0; i < Articulos.length(); i++) {
                Articulo=Articulos.getJSONObject(i);
-                existencia=Float.parseFloat(Articulo.getString("OEXISTENC"));
+                existencia=Float.parseFloat(Articulo.optString("existencias","0"));
                 if(existencia>1){
-                    codigoString=Articulo.getString("OCODIGO");    
+                    codigoString=Articulo.getString("codigo");    
                 }                
             }
-        } catch (JSONException e) {
+        } catch (JSONException | NumberFormatException e) {
             codigoString="00";
             GuardarLog("el articulo no se encontro"+filtro);
         }
@@ -331,40 +319,23 @@ public class consularVentasEDSPalustre {
         JSONObject cliente = new JSONObject();
         JsonObject tercero = new JsonObject();
         String nombre="";
-        OkHttpClient client =new OkHttpClient();
-        OkHttpClient.Builder builder = new OkHttpClient.Builder();
-        builder = configureToIgnoreCertificate(builder);
-        builder.connectTimeout(5, TimeUnit.MINUTES).writeTimeout(5, TimeUnit.MINUTES).readTimeout(5, TimeUnit.MINUTES);
-        MediaType mediaType = MediaType.parse("application/json");
-        client=builder.build();
-        Request request = null;
+        String filtro="";
         if (tipo.equals("cliente")){
-            request=new Request.Builder().url("https://api.tns.co/api/Tercero/Listar?empresa="+empresaTNS+"&filtro="+venta.getString("nombre_cliente")+"&usuario="+usuarioTNS+"&password="+passwordTNS+"&tnsapitoken="+tokenTNS+"&codsucursal=00").get()    
-            .addHeader("Authorization", "Bearer "+token)
-            .addHeader("Content-Type", "application/json")
-            .addHeader("Accept", "application/json").build();
-           // System.out.println(venta.getString("nombre_cliente"));
+            filtro=venta.getString("nombre_cliente");
         }else{
-            request=new Request.Builder().url("https://api.tns.co/api/Tercero/Listar?empresa="+empresaTNS+"&filtro="+venta.getString("promotor")+"&usuario="+usuarioTNS+"&password="+passwordTNS+"&tnsapitoken="+tokenTNS+"&codsucursal=00").get()    
-            .addHeader("Authorization", "Bearer "+token)
-            .addHeader("Content-Type", "application/json")
-            .addHeader("Accept", "application/json").build(); 
-          //  System.out.println(venta.getString("promotor"));           
+            filtro=venta.getString("promotor");
         }
-        
-        Response response = client.newCall(request).execute();
-        String respuesta=response.body().string();        
-        respuesta=respuesta.replaceAll("\\\\","");
-        respuesta=respuesta.substring(1);
-        respuesta=respuesta.substring(0, respuesta.length() - 1);
-        rta=new JSONObject(respuesta.replaceAll("\"A\"",""));
+        HttpUrl urlTercero=HttpUrl.parse(URLTNS+"/v2/tablas/Tercero/Listar").newBuilder()
+            .addQueryParameter("filtro", filtro).build();
+        Response response = EjecutarTNS(urlTercero, null);
+        rta=LeerRespuestaTNS(response.body().string());
         try {                
-            clientes=rta.getJSONArray("results");
+            clientes=rta.getJSONArray("data");
             for (int i = 0; i < clientes.length(); i++) {
                 cliente=clientes.getJSONObject(i);
                 if(tipo.equals("cliente")) {
-                    if (cliente.getString("ONOMBRE").equals(venta.getString("nombre_cliente"))){
-                        teridString=cliente.getString("OCODIGO");                
+                    if (cliente.optString("nombre").equals(venta.getString("nombre_cliente"))){
+                        teridString=cliente.getString("codigo");                
                     }else{
                         teridString="222222222222";
                         tercero.addProperty("codigo", venta.getString("numero_documento_fe"));
@@ -385,8 +356,8 @@ public class consularVentasEDSPalustre {
                         
                     }
                 }else{
-                    if (cliente.getString("ONOMBRE").equals(venta.getString("promotor"))){
-                        teridString=cliente.getString("OCODIGO");                
+                    if (cliente.optString("nombre").equals(venta.getString("promotor"))){
+                        teridString=cliente.getString("codigo");                
                     }else{
                         teridString="0";
                     }
@@ -399,6 +370,81 @@ public class consularVentasEDSPalustre {
         }    
      //  System.out.println(teridString);
         return teridString;
+    }
+    /**
+     * Inicia sesion en el API v2 de TNS y guarda el token (Bearer) en tokenTNS.
+     */
+    public static Boolean LoginTNS() throws IOException, SQLException{
+        JsonObject login = new JsonObject();
+        login.addProperty("codigoEmpresa", empresaTNS);
+        login.addProperty("nombreUsuario", usuarioTNS);
+        login.addProperty("contrasenia", passwordTNS);
+        RequestBody body = RequestBody.create(MediaType.parse("application/json"), new Gson().toJson(login));
+        Request request = new Request.Builder().url(URLTNS+"/v2/Acceso/Login").post(body)
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Accept", "application/json").build();
+        Response response = ClienteTNS().newCall(request).execute();
+        JSONObject rta=LeerRespuestaTNS(response.body().string());
+        tokenTNS="";
+        if(response.code()==200 && rta.optBoolean("status")){
+            tokenTNS=rta.optString("data");
+        }
+        if(tokenTNS.isEmpty()){
+            GuardarLog("NO FUE POSIBLE INICIAR SESION EN TNS "+response.code()+" "+rta.optString("message"));
+            return false;
+        }
+        return true;
+    }
+    /**
+     * Ejecuta una peticion al API de TNS con el token Bearer (GET si body es null, POST si no).
+     * Si el token vencio (401) inicia sesion de nuevo y reintenta una vez.
+     */
+    public static Response EjecutarTNS(HttpUrl urlTNS, RequestBody body) throws IOException, SQLException{
+        Response response=null;
+        for (int intento = 0; intento < 2; intento++) {
+            Request.Builder requestBuilder = new Request.Builder().url(urlTNS)
+                .addHeader("Authorization", "Bearer "+tokenTNS)
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Accept", "application/json");
+            if(body==null){
+                requestBuilder.get();
+            }else{
+                requestBuilder.post(body);
+            }
+            response = ClienteTNS().newCall(requestBuilder.build()).execute();
+            if(response.code()!=401 || intento==1 || !LoginTNSDeNuevo(response)){
+                break;
+            }
+        }
+        return response;
+    }
+    private static Boolean LoginTNSDeNuevo(Response response) throws IOException, SQLException{
+        response.close();
+        return LoginTNS();
+    }
+    /**
+     * Convierte la respuesta del API de TNS en JSON, aunque venga serializada como texto.
+     */
+    public static JSONObject LeerRespuestaTNS(String respuesta){
+        JSONObject rta;
+        try {
+            Object valor=new JSONTokener(respuesta.trim()).nextValue();
+            if(valor instanceof String){
+                valor=new JSONTokener(((String) valor).trim()).nextValue();
+            }
+            rta=(JSONObject) valor;
+        } catch (Exception e) {
+            rta=new JSONObject();
+            rta.put("status", false);
+            rta.put("message", respuesta.length()>200 ? respuesta.substring(0, 200) : respuesta);
+        }
+        return rta;
+    }
+    private static OkHttpClient ClienteTNS(){
+        OkHttpClient.Builder builder = new OkHttpClient.Builder();
+        builder = configureToIgnoreCertificate(builder);
+        builder.connectTimeout(5, TimeUnit.MINUTES).writeTimeout(5, TimeUnit.MINUTES).readTimeout(5, TimeUnit.MINUTES);
+        return builder.build();
     }
     public static void GuardarLog(String observacionString) throws SQLException{
         Tns.actualizar("INSERT INTO LOGTERPEL(FECHA,OBSERVACIONES)values('now','"+observacionString+"')");
@@ -479,7 +525,6 @@ public class consularVentasEDSPalustre {
             if (rs.getString("variab").equals("USUARIOTNSTERPEL")) { usuarioTNS = rs.getString("contenido"); }        
             if (rs.getString("variab").equals("CLAVETNSTERPEL")) { passwordTNS = rs.getString("contenido"); }        
             if (rs.getString("variab").equals("EMPRESATNSTERPEL")) { empresaTNS = rs.getString("contenido"); }        
-            if (rs.getString("variab").equals("TOKENTERPEL")) { tokenTNS = rs.getString("contenido"); }        
         }
         token=usuario+":"+password;
         token=DatatypeConverter.printBase64Binary(token.getBytes());
