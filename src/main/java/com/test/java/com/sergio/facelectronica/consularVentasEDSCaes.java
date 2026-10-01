@@ -2,6 +2,8 @@ package com.test.java.com.sergio.facelectronica;
 import java.io.*;
 import java.security.cert.CertificateException;
 import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.sql.ResultSet;
 import javax.net.ssl.HostnameVerifier;
@@ -43,6 +45,8 @@ public class consularVentasEDSCaes {
     private static JSONObject sale = new JSONObject();
     private static String json =null; 
     private static String sqlString="";
+    private static final String CONSUMIDORFINAL="222222222222";
+    private static Map<String,String> tercerosConsultados = new HashMap<>();
 
     /**
      * @param args
@@ -296,46 +300,187 @@ public class consularVentasEDSCaes {
         return codigoString;
     }
 
+    /**
+     * Busca el tercero en TNS (primero por documento y luego por nombre) con la misma logica
+     * de consularVentasSauceLosAngeles. Si no existe lo crea en TNS por API:
+     * el cliente con los datos de caes.eds.com.co (por la placa) y el vendedor con los datos del empleado.
+     */
     public static String ConsultarTerid(JSONObject venta,String tipo) throws ClassNotFoundException, SQLException, IOException{
         String teridString="";
+        String documento="";
         String nombre="";
-        JSONObject rta = new JSONObject();
-        JSONArray terceros = new JSONArray();
-        JSONObject tercero = new JSONObject();
-        if(tipo.equals("cliente")){
-            teridString="222222222222";
-            if(venta.get("Cliente").equals(null)){
-                GuardarLog("LA FACTURA "+venta.getString("Recibo")+" SE CARGO CON EL CLIENTE CONSUMIDOR FINAL ");
-                return teridString;
-            }
-            nombre=venta.getJSONObject("Cliente").getString("Nombre").toUpperCase().trim();
-        }else{
-            teridString="0";
-            if(venta.get("Empleado").equals(null)){
-                return teridString;
-            }
-            nombre=venta.getJSONObject("Empleado").getString("Nombre").toUpperCase().trim();
+        String placa=ObtenerCampo(venta, "Placa").trim().toUpperCase();
+        if(!placa.isEmpty()){
+            placa=placa.split(" ")[0];
         }
-        HttpUrl urlTercero=HttpUrl.parse(URLTNS+"/v2/tablas/Tercero/Listar").newBuilder()
-            .addQueryParameter("filtro", nombre).build();
-        Response response = EjecutarTNS(urlTercero, null);
-        rta=LeerRespuestaTNS(response.body().string());
-        try {                
-            terceros=rta.getJSONArray("data");
-            for (int i = 0; i < terceros.length(); i++) {
-                tercero=terceros.getJSONObject(i);
-                if (tercero.optString("nombre").toUpperCase().trim().equals(nombre)){
-                    teridString=tercero.getString("codigo");                
+        if(tipo.equals("cliente")){
+            if(venta.get("Cliente").equals(null)){
+                if(placa.isEmpty()){
+                    GuardarLog("LA FACTURA "+venta.getString("Recibo")+" SE CARGO CON EL CLIENTE CONSUMIDOR FINAL ");
+                    return CONSUMIDORFINAL;
+                }
+                documento=placa;
+            }else{
+                documento=ObtenerCampo(venta.getJSONObject("Cliente"), "NumeroDocumento").trim();
+                nombre=ObtenerCampo(venta.getJSONObject("Cliente"), "Nombre").toUpperCase().trim();
+            }
+        }else{
+            if(venta.get("Empleado").equals(null)){
+                return "0";
+            }
+            documento=ObtenerCampo(venta.getJSONObject("Empleado"), "Cedula").trim();
+            nombre=ObtenerCampo(venta.getJSONObject("Empleado"), "Nombre").toUpperCase().trim();
+        }
+        String llave=tipo+"|"+documento+"|"+nombre+"|"+placa;
+        if(tercerosConsultados.containsKey(llave)){
+            teridString=tercerosConsultados.get(llave);
+            if(tipo.equals("cliente") && teridString.equals(CONSUMIDORFINAL)){
+                GuardarLog("LA FACTURA "+venta.getString("Recibo")+" SE CARGO CON EL CLIENTE CONSUMIDOR FINAL ");
+            }
+            return teridString;
+        }
+        teridString=BuscarTerceroTNS(documento, nombre);
+        if(teridString.isEmpty()){
+            if(tipo.equals("cliente")){
+                if(!placa.isEmpty()){
+                    teridString=CrearClienteCaes(placa);
+                }
+                if(teridString.isEmpty()){
+                    GuardarLog("LA FACTURA "+venta.getString("Recibo")+" SE CARGO CON EL CLIENTE CONSUMIDOR FINAL ");
+                    teridString=CONSUMIDORFINAL;
+                }
+            }else{
+                teridString=CrearVendedorTNS(venta.getJSONObject("Empleado"));
+                if(teridString.isEmpty()){
+                    teridString="0";
                 }
             }
         }
-        catch (Exception e) {
-            // se deja el tercero por defecto
-        }    
-        if(tipo.equals("cliente") && teridString.equals("222222222222")){
-            GuardarLog("LA FACTURA "+venta.getString("Recibo")+" SE CARGO CON EL CLIENTE CONSUMIDOR FINAL ");
-        }
+        tercerosConsultados.put(llave, teridString);
         return teridString;
+    }
+    /**
+     * Devuelve el codigo del tercero en TNS buscando primero por documento (nit/codigo) y luego por nombre.
+     */
+    public static String BuscarTerceroTNS(String documento,String nombre) throws IOException, SQLException{
+        JSONArray terceros;
+        JSONObject tercero;
+        if(!documento.isEmpty()){
+            terceros=ListarTercerosTNS(documento);
+            for (int i = 0; i < terceros.length(); i++) {
+                tercero=terceros.getJSONObject(i);
+                String nit=tercero.optString("nit").trim();
+                if (nit.equals(documento) || nit.startsWith(documento+"-") || tercero.optString("codigo").trim().equals(documento)){
+                    return tercero.optString("codigo");
+                }
+            }
+        }
+        if(!nombre.isEmpty()){
+            terceros=ListarTercerosTNS(nombre);
+            for (int i = 0; i < terceros.length(); i++) {
+                tercero=terceros.getJSONObject(i);
+                if (tercero.optString("nombre").toUpperCase().trim().equals(nombre)){
+                    return tercero.optString("codigo");
+                }
+            }
+        }
+        return "";
+    }
+    public static JSONArray ListarTercerosTNS(String filtro) throws IOException, SQLException{
+        HttpUrl urlTercero=HttpUrl.parse(URLTNS+"/v2/tablas/Tercero/Listar").newBuilder()
+            .addQueryParameter("filtro", filtro).build();
+        Response response = EjecutarTNS(urlTercero, null);
+        JSONObject rta=LeerRespuestaTNS(response.body().string());
+        JSONArray terceros=rta.optJSONArray("data");
+        if(terceros==null){
+            terceros=new JSONArray();
+        }
+        return terceros;
+    }
+    /**
+     * Consulta el cliente en caes.eds.com.co por la placa (identificacion) y lo crea en TNS.
+     */
+    public static String CrearClienteCaes(String placa) throws IOException, SQLException{
+        OkHttpClient client = new OkHttpClient();
+        Request request = new Request.Builder()
+        .url("https://caes.eds.com.co/api/thirds/?identification="+placa+"&type=CC")
+        .get()
+        .addHeader("Accept", "*/*")
+        .addHeader("User-Agent", "Thunder Client (https://www.thunderclient.com)")
+        .build();
+        try {
+            Response response = client.newCall(request).execute();
+            JSONObject tercero =new JSONObject(response.body().string());
+            if(tercero.optInt("count")>0){
+                JSONObject datos=tercero.getJSONArray("results").getJSONObject(0);
+                String documento=datos.optString("identification").trim();
+                if(documento.isEmpty()){
+                    documento=placa;
+                }
+                String nombre=(datos.optString("last_name")+" "+datos.optString("second_last_name")+" "+datos.optString("name")+" "+datos.optString("second_name")).trim().replaceAll(" +", " ").toUpperCase();
+                JsonObject nuevo=TerceroBase(documento, nombre, datos.optString("address"), "", datos.optString("email"));
+                nuevo.addProperty("nombre1", datos.optString("name"));
+                nuevo.addProperty("nombre2", datos.optString("second_name"));
+                nuevo.addProperty("apellido1", datos.optString("last_name"));
+                nuevo.addProperty("apellido2", datos.optString("second_last_name"));
+                nuevo.addProperty("cliente", "S");
+                if(CrearTerceroTNS(nuevo)){
+                    return documento;
+                }
+            }
+        } catch (IOException | JSONException e) {
+            GuardarLog("NO FUE POSIBLE CONSULTAR EL CLIENTE "+placa+" EN CAES");
+        }
+        return "";
+    }
+    /**
+     * Crea el vendedor en TNS con los datos del empleado de la venta.
+     */
+    public static String CrearVendedorTNS(JSONObject empleado) throws IOException, SQLException{
+        String documento=ObtenerCampo(empleado, "Cedula").trim();
+        if(documento.isEmpty()){
+            return "";
+        }
+        JsonObject nuevo=TerceroBase(documento, ObtenerCampo(empleado, "Nombre").toUpperCase().trim(),
+            ObtenerCampo(empleado, "Direccion"), ObtenerCampo(empleado, "Telefono"), "");
+        nuevo.addProperty("empleado", "S");
+        nuevo.addProperty("vended", "S");
+        if(CrearTerceroTNS(nuevo)){
+            return documento;
+        }
+        return "";
+    }
+    private static JsonObject TerceroBase(String documento,String nombre,String direccion,String telefono,String email){
+        JsonObject tercero=new JsonObject();
+        tercero.addProperty("codigo", documento);
+        tercero.addProperty("natJuridica", "N");
+        tercero.addProperty("tipoDocumento", "C");
+        tercero.addProperty("nit", documento);
+        tercero.addProperty("nombre", nombre);
+        tercero.addProperty("nomRegTri", nombre);
+        tercero.addProperty("direccion", direccion.trim().isEmpty() ? "SIN DIRECCION" : direccion.trim());
+        tercero.addProperty("codigoCiudad", "00");
+        tercero.addProperty("nombreCiudad", "SIN CIUDAD");
+        tercero.addProperty("zona1", "00");
+        tercero.addProperty("clasificacion", "00");
+        tercero.addProperty("codigoBarrio", "00");
+        tercero.addProperty("inactivo", false);
+        tercero.addProperty("privada", "N");
+        tercero.addProperty("mixta", "N");
+        tercero.addProperty("telefono", telefono.trim().isEmpty() ? "SIN TELEFONO" : telefono.trim());
+        tercero.addProperty("email", email.trim().isEmpty() ? "SIN EMAIL" : email.trim());
+        tercero.addProperty("comision", 0);
+        return tercero;
+    }
+    public static Boolean CrearTerceroTNS(JsonObject tercero) throws IOException, SQLException{
+        RequestBody body = RequestBody.create(MediaType.parse("application/json"), new Gson().toJson(tercero));
+        Response response = EjecutarTNS(HttpUrl.parse(URLTNS+"/v2/tablas/Tercero/Crear"), body);
+        JSONObject rta=LeerRespuestaTNS(response.body().string());
+        if(response.code()!=200 || !rta.optBoolean("status")){
+            GuardarLog("NO FUE POSIBLE CREAR EL TERCERO "+tercero.get("nit").getAsString()+" EN TNS "+response.code()+" "+rta.optString("message"));
+            return false;
+        }
+        return true;
     }
     /**
      * Inicia sesion en el API v2 de TNS y guarda el token (Bearer) en tokenTNS.
