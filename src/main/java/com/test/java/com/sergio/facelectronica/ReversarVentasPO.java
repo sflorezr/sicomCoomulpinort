@@ -37,7 +37,7 @@ import okhttp3.*;
  * Usa la conexion de caes.properties (login TNS de consularVentasEDSCaes) y estos parametros opcionales:
  *   reversar.prefijo=PO                      prefijo de las facturas a reversar
  *   reversar.prefijoDevolucion=00            prefijo de las devoluciones
- *   reversar.motivo=REVERSION VENTA MAL SUBIDA
+ *   reversar.motivo=01                       codigo del motivo de devolucion en TNS (si no esta, se pide en pantalla)
  *   reversar.usarFechaFactura=S              S: devolucion con la fecha de la factura, N: con la fecha actual
  * El banco, la talla y el color se toman de tns.banco, tns.talla y tns.color (por defecto 00).
  * Las facturas reversadas se registran en reversadas_<prefijo>.txt para no reversarlas dos veces,
@@ -46,7 +46,7 @@ import okhttp3.*;
 public class ReversarVentasPO {
     private static String prefijoFacturas="PO";
     private static String prefijoDevolucion="00";
-    private static String motivo="REVERSION VENTA MAL SUBIDA";
+    private static String motivo="";
     private static boolean usarFechaFactura=true;
     private static Set<String> reversadas=new HashSet<>();
     private static final int ERRORESSEGUIDOS=5;
@@ -66,7 +66,7 @@ public class ReversarVentasPO {
             if(consularVentasEDSCaes.CargarConfiguracion()){
                 prefijoFacturas=consularVentasEDSCaes.config.getProperty("reversar.prefijo","PO").trim();
                 prefijoDevolucion=consularVentasEDSCaes.config.getProperty("reversar.prefijoDevolucion","00").trim();
-                motivo=consularVentasEDSCaes.config.getProperty("reversar.motivo","REVERSION VENTA MAL SUBIDA").trim();
+                motivo=consularVentasEDSCaes.config.getProperty("reversar.motivo","").trim();
                 usarFechaFactura=!consularVentasEDSCaes.config.getProperty("reversar.usarFechaFactura","S").trim().equalsIgnoreCase("N");
                 CrearVentana();
             }else{
@@ -122,6 +122,7 @@ public class ReversarVentasPO {
         barra.setString("Buscando ventas...");
         new SwingWorker<List<JSONObject>, Void>() {
             boolean sinSesion=false;
+            JSONArray motivos=null;
             int yaReversadas=0;
             @Override
             protected List<JSONObject> doInBackground() throws Exception {
@@ -157,6 +158,10 @@ public class ReversarVentasPO {
                     facturas.add(factura);
                 }
                 consularVentasEDSCaes.GuardarLog("FACTURAS "+prefijoFacturas+" POR REVERSAR: "+facturas.size()+" (YA REVERSADAS ANTES: "+yaReversadas+")");
+                if(!facturas.isEmpty()){
+                    Estado("Consultando los motivos de devolucion...");
+                    motivos=ConsultarMotivos();
+                }
                 return facturas;
             }
             @Override
@@ -184,6 +189,10 @@ public class ReversarVentasPO {
                     Finalizar("No hay ventas "+prefijoFacturas+" por reversar."+aviso, JOptionPane.INFORMATION_MESSAGE);
                     return;
                 }
+                if(!ElegirMotivo(motivos)){
+                    Finalizar("Reversion cancelada. No se selecciono un motivo de devolucion valido (ver log).", JOptionPane.INFORMATION_MESSAGE);
+                    return;
+                }
                 double total=0;
                 for (JSONObject factura : facturas) {
                     total+=Numero(factura.optString("valorNeto"));
@@ -192,7 +201,7 @@ public class ReversarVentasPO {
                 int opcion=JOptionPane.showOptionDialog(ventana,
                     "Se encontraron "+facturas.size()+" facturas "+prefijoFacturas+" por reversar"
                     +"\npor un valor neto de $"+String.format("%,.2f", total)+"."+aviso
-                    +"\n\nSe creara una devolucion (prefijo "+prefijoDevolucion+") por cada factura."
+                    +"\n\nSe creara una devolucion (prefijo "+prefijoDevolucion+", motivo "+motivo+") por cada factura."
                     +"\nEsta operacion no se puede deshacer desde este programa.",
                     "Confirmar reversion", JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, opciones, opciones[1]);
                 if(opcion==1){
@@ -268,6 +277,61 @@ public class ReversarVentasPO {
                     resultado[1]>0 ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
             }
         }.execute();
+    }
+
+    /**
+     * Consulta los motivos de devolucion de TNS (codigo, descripcion). Devuelve null si no se pudo.
+     */
+    private static JSONArray ConsultarMotivos() throws IOException{
+        Response response=consularVentasEDSCaes.EjecutarTNS(HttpUrl.parse(consularVentasEDSCaes.URLTNS+"/v2/Interaccion/ObtenerMotivos"), null);
+        String respuesta=response.body().string();
+        JSONArray motivos=consularVentasEDSCaes.LeerRespuestaTNS(respuesta).optJSONArray("data");
+        if(response.code()!=200 || motivos==null){
+            consularVentasEDSCaes.GuardarLog("ERROR "+response.code()+" CONSULTANDO LOS MOTIVOS DE DEVOLUCION: "+consularVentasEDSCaes.Recortar(respuesta));
+            return null;
+        }
+        return motivos;
+    }
+    /**
+     * Valida reversar.motivo contra los motivos de TNS o pide elegir uno. Devuelve false si no hay motivo.
+     */
+    private static boolean ElegirMotivo(JSONArray motivos){
+        if(motivos==null || motivos.length()==0){
+            if(motivo.isEmpty()){
+                consularVentasEDSCaes.GuardarLog("NO SE PUDIERON CONSULTAR LOS MOTIVOS DE DEVOLUCION Y NO HAY reversar.motivo EN caes.properties");
+                return false;
+            }
+            consularVentasEDSCaes.GuardarLog("NO SE PUDIERON CONSULTAR LOS MOTIVOS DE DEVOLUCION, SE USA reversar.motivo="+motivo);
+            return true;
+        }
+        List<String> opciones=new ArrayList<>();
+        String seleccionada=null;
+        for (int i = 0; i < motivos.length(); i++) {
+            JSONObject m=motivos.optJSONObject(i);
+            if(m==null){
+                continue;
+            }
+            String opcion=m.optString("codigo").trim()+" - "+m.optString("descripcion").trim();
+            opciones.add(opcion);
+            if(!motivo.isEmpty() && (m.optString("codigo").trim().equalsIgnoreCase(motivo) || m.optString("descripcion").trim().equalsIgnoreCase(motivo))){
+                seleccionada=opcion;
+            }
+        }
+        if(seleccionada==null){
+            if(!motivo.isEmpty()){
+                consularVentasEDSCaes.GuardarLog("EL MOTIVO '"+motivo+"' DE caes.properties NO EXISTE EN TNS, SE PIDE SELECCIONARLO");
+            }
+            Object elegido=JOptionPane.showInputDialog(ventana, "Seleccione el motivo de devolucion de TNS para las reversiones:",
+                "Motivo de devolucion", JOptionPane.QUESTION_MESSAGE, null, opciones.toArray(), opciones.isEmpty() ? null : opciones.get(0));
+            if(elegido==null){
+                consularVentasEDSCaes.GuardarLog("NO SE SELECCIONO MOTIVO DE DEVOLUCION");
+                return false;
+            }
+            seleccionada=elegido.toString();
+        }
+        motivo=seleccionada.substring(0, seleccionada.indexOf(" - ")).trim();
+        consularVentasEDSCaes.GuardarLog("MOTIVO DE DEVOLUCION: "+seleccionada);
+        return true;
     }
 
     /**
