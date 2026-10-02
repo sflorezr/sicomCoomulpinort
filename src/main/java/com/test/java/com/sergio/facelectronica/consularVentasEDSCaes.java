@@ -53,10 +53,13 @@ import okhttp3.*;
  * entre una fecha inicial y una final, muestra cuantas hay, y si el usuario confirma las sube a TNS
  * por API v2 (api.tns.co/v2/facturacion/Ventas/Crear) con token Bearer obtenido en /v2/Acceso/Login.
  * Los datos de conexion se leen de caes.properties y el resultado queda en logs/caes_*.log,
- * ambos en la carpeta del jar.
+ * ambos en la carpeta del jar. El numero de la factura lo asigna TNS (consecutivo del prefijo),
+ * salvo en las ventas con factura electronica de la estacion, y los recibos ya subidos se registran
+ * en recibos_subidos.txt para no subirlos de nuevo.
  */
 public class consularVentasEDSCaes {
     private static final String ARCHIVOCONFIG="caes.properties";
+    private static final String ARCHIVORECIBOS="recibos_subidos.txt";
     private static final String CONSUMIDORFINAL="222222222222";
     private static final DateTimeFormatter FORMATOFECHA=DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static String URLTNS="https://api.tns.co";
@@ -75,6 +78,7 @@ public class consularVentasEDSCaes {
     private static Map<String,String> tercerosConsultados = new HashMap<>();
     private static PrintWriter log=null;
     private static File archivoLog=null;
+    private static java.util.Set<String> recibosSubidos=new java.util.HashSet<>();
 
     private static JFrame ventana;
     private static JSpinner fechaInicial;
@@ -241,8 +245,10 @@ public class consularVentasEDSCaes {
         barra.setString("Consultando ventas...");
         new SwingWorker<List<JSONObject>, Void>() {
             int diasConError=0;
+            int yaSubidas=0;
             @Override
             protected List<JSONObject> doInBackground() throws Exception {
+                CargarRecibosSubidos();
                 List<JSONObject> ventas=new ArrayList<>();
                 long totalDias=java.time.temporal.ChronoUnit.DAYS.between(inicio, fin)+1;
                 int dia=0;
@@ -255,7 +261,13 @@ public class consularVentasEDSCaes {
                         continue;
                     }
                     for (int i = 0; i < ventasDia.length(); i++) {
-                        ventas.add(ventasDia.getJSONObject(i));
+                        JSONObject venta=ventasDia.getJSONObject(i);
+                        if(recibosSubidos.contains(LlaveRecibo(venta))){
+                            yaSubidas++;
+                            GuardarLog("EL RECIBO "+venta.optString("Recibo").trim()+" YA FUE SUBIDO ANTERIORMENTE, SE OMITE");
+                            continue;
+                        }
+                        ventas.add(venta);
                     }
                     GuardarLog("DIA "+fecha.format(FORMATOFECHA)+": "+ventasDia.length()+" VENTAS");
                 }
@@ -273,14 +285,20 @@ public class consularVentasEDSCaes {
                     Finalizar("Ocurrio un error consultando las ventas.", JOptionPane.ERROR_MESSAGE);
                     return;
                 }
-                GuardarLog("TOTAL VENTAS ENCONTRADAS: "+ventas.size());
-                String aviso=diasConError>0 ? "\n\nAtencion: "+diasConError+" dia(s) no se pudieron consultar (ver log)." : "";
+                GuardarLog("TOTAL VENTAS POR SUBIR: "+ventas.size()+" (YA SUBIDAS ANTES: "+yaSubidas+")");
+                String aviso="";
+                if(yaSubidas>0){
+                    aviso+="\n"+yaSubidas+" venta(s) ya fueron subidas anteriormente y se omiten.";
+                }
+                if(diasConError>0){
+                    aviso+="\n\nAtencion: "+diasConError+" dia(s) no se pudieron consultar (ver log).";
+                }
                 if(ventas.isEmpty()){
-                    Finalizar("No se encontraron ventas entre "+inicio.format(FORMATOFECHA)+" y "+fin.format(FORMATOFECHA)+"."+aviso, JOptionPane.INFORMATION_MESSAGE);
+                    Finalizar("No hay ventas por subir entre "+inicio.format(FORMATOFECHA)+" y "+fin.format(FORMATOFECHA)+"."+aviso, JOptionPane.INFORMATION_MESSAGE);
                     return;
                 }
                 int opcion=JOptionPane.showConfirmDialog(ventana,
-                    "Se encontraron "+ventas.size()+" ventas entre "+inicio.format(FORMATOFECHA)+" y "+fin.format(FORMATOFECHA)+"."+aviso+"\n\nDesea subirlas a TNS?",
+                    "Se encontraron "+ventas.size()+" ventas por subir entre "+inicio.format(FORMATOFECHA)+" y "+fin.format(FORMATOFECHA)+"."+aviso+"\n\nDesea subirlas a TNS?",
                     "Confirmar carga", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
                 if(opcion!=JOptionPane.YES_OPTION){
                     GuardarLog("CARGA CANCELADA POR EL USUARIO");
@@ -392,6 +410,41 @@ public class consularVentasEDSCaes {
         return causa.getClass().getSimpleName()+" "+causa.getMessage();
     }
 
+    /**
+     * Registro local de recibos ya subidos a TNS (estacion;recibo;fecha;factura;fecha de carga).
+     */
+    private static File ArchivoRecibos(){
+        return new File(CarpetaAplicacion(), ARCHIVORECIBOS);
+    }
+    private static String LlaveRecibo(JSONObject venta){
+        return idEstacion+";"+venta.optString("Recibo").trim();
+    }
+    private static synchronized void CargarRecibosSubidos() throws IOException{
+        recibosSubidos.clear();
+        File archivo=ArchivoRecibos();
+        if(!archivo.exists()){
+            return;
+        }
+        try (BufferedReader br=new BufferedReader(new InputStreamReader(new FileInputStream(archivo), StandardCharsets.UTF_8))) {
+            String linea;
+            while ((linea=br.readLine())!=null) {
+                String[] partes=linea.split(";");
+                if(partes.length>=2){
+                    recibosSubidos.add(partes[0].trim()+";"+partes[1].trim());
+                }
+            }
+        }
+    }
+    private static synchronized void RegistrarReciboSubido(JSONObject venta,String fecha,String factura){
+        String llave=LlaveRecibo(venta);
+        recibosSubidos.add(llave);
+        try (Writer w=new OutputStreamWriter(new FileOutputStream(ArchivoRecibos(), true), StandardCharsets.UTF_8)) {
+            w.write(llave+";"+fecha+";"+factura+";"+LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))+"\r\n");
+        } catch (IOException e) {
+            GuardarLog("NO FUE POSIBLE REGISTRAR EL RECIBO "+venta.optString("Recibo")+" EN "+ARCHIVORECIBOS+": "+e.getMessage());
+        }
+    }
+
     private static void AbrirLog() throws IOException{
         File carpeta=new File(CarpetaAplicacion(), "logs");
         carpeta.mkdirs();
@@ -453,6 +506,7 @@ public class consularVentasEDSCaes {
         String formapago="CO";
         String plazoDias="0";
         String numero="";
+        String recibo=sale.getString("Recibo").trim();
         // forma de pago con la misma logica de Monterrey
         if(sale.get("FacturacionElectronica").equals(null)){
             if(!ObtenerCampo(sale, "Kilometraje").equals("6")){
@@ -465,7 +519,8 @@ public class consularVentasEDSCaes {
                     }                       
                 }
             }
-            numero=sale.getString("Recibo").trim();
+            // el numero lo asigna TNS con el consecutivo del prefijo
+            numero="";
         }else {
             numero=sale.getJSONArray("FacturacionElectronica").getJSONObject(0).getString("Numero");
         }
@@ -480,7 +535,7 @@ public class consularVentasEDSCaes {
         fechaVentaString=fechaVentaString.substring(8, 10)+'/'+fechaVentaString.substring(5, 7)+'/'+fechaVentaString.substring(0, 4);
         String matidString=BuscarMaterialAPI(sale.getJSONObject("Producto").getString("Nombre"));
         if(matidString.equals("00")){
-            GuardarLog("EL ARTICULO "+sale.getJSONObject("Producto").getString("Nombre")+" NO EXISTE, EN LA FACTURA "+prefijo+numero);
+            GuardarLog("EL ARTICULO "+sale.getJSONObject("Producto").getString("Nombre")+" NO EXISTE, EN EL RECIBO "+recibo);
             return false;
         }
         Float Cantidad=sale.getFloat("Valor")/sale.getFloat("Precio");
@@ -536,10 +591,15 @@ public class consularVentasEDSCaes {
             if(datos!=null && !datos.optString("response").isEmpty()){
                 mensaje=datos.optString("response");
             }
-            GuardarLog("ERROR "+response2.code()+" "+mensaje+" en la factura "+prefijo+numero);
+            GuardarLog("ERROR "+response2.code()+" "+mensaje+" en el recibo "+recibo);
             return false;
         }
-        GuardarLog("FACTURA "+prefijo+numero+" SUBIDA A TNS");
+        String factura=numero;
+        if(datos!=null && !datos.optString("consecutivo").trim().isEmpty()){
+            factura=datos.optString("consecutivo").trim();
+        }
+        RegistrarReciboSubido(sale, fechaVentaString, prefijo+factura);
+        GuardarLog("RECIBO "+recibo+" SUBIDO A TNS COMO FACTURA "+prefijo+factura);
         return true;
     }
 
@@ -597,7 +657,7 @@ public class consularVentasEDSCaes {
         if(tipo.equals("cliente")){
             if(venta.get("Cliente").equals(null)){
                 if(placa.isEmpty()){
-                    GuardarLog("LA FACTURA "+venta.getString("Recibo")+" SE CARGO CON EL CLIENTE CONSUMIDOR FINAL ");
+                    GuardarLog("EL RECIBO "+venta.getString("Recibo")+" SE CARGO CON EL CLIENTE CONSUMIDOR FINAL");
                     return CONSUMIDORFINAL;
                 }
                 documento=placa;
@@ -616,7 +676,7 @@ public class consularVentasEDSCaes {
         if(tercerosConsultados.containsKey(llave)){
             teridString=tercerosConsultados.get(llave);
             if(tipo.equals("cliente") && teridString.equals(CONSUMIDORFINAL)){
-                GuardarLog("LA FACTURA "+venta.getString("Recibo")+" SE CARGO CON EL CLIENTE CONSUMIDOR FINAL ");
+                GuardarLog("EL RECIBO "+venta.getString("Recibo")+" SE CARGO CON EL CLIENTE CONSUMIDOR FINAL");
             }
             return teridString;
         }
@@ -627,7 +687,7 @@ public class consularVentasEDSCaes {
                     teridString=CrearClienteCaes(placa);
                 }
                 if(teridString.isEmpty()){
-                    GuardarLog("LA FACTURA "+venta.getString("Recibo")+" SE CARGO CON EL CLIENTE CONSUMIDOR FINAL ");
+                    GuardarLog("EL RECIBO "+venta.getString("Recibo")+" SE CARGO CON EL CLIENTE CONSUMIDOR FINAL");
                     teridString=CONSUMIDORFINAL;
                 }
             }else{
