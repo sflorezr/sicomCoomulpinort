@@ -50,3 +50,19 @@ jar {
     }
 
 }
+// Jar ejecutable de la carga de ventas Caes a TNS con todas las librerias incluidas.
+// Se genera con: gradlew caesJar  (queda en build/libs/CaesVentas.jar)
+task caesJar(type: Jar) {
+    archiveBaseName = 'CaesVentas'
+    archiveVersion = ''
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest {
+        attributes "Main-Class": "com.test.java.com.sergio.facelectronica.consularVentasEDSCaes"
+    }
+    from sourceSets.main.output
+    dependsOn configurations.runtimeClasspath
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+}
