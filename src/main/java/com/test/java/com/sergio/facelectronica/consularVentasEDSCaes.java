@@ -71,7 +71,7 @@ public class consularVentasEDSCaes {
     private static String empresaTNS="";  
     static String sucursalTNS="00";
     static Properties config=new Properties();
-    private static String bodega="00";
+    static String bodega="00";
     private static String centroCosto="00";
     private static String prefijo="FE";
     private static DateTimeFormatter formatoFechaReporte=DateTimeFormatter.ofPattern("yyyy-MM-dd");
@@ -613,6 +613,39 @@ public class consularVentasEDSCaes {
             return null;
         }
     }
+    /**
+     * Arma el mensaje de error de una respuesta de TNS: data.response, message, o el detalle
+     * de validacion (errors/title) que TNS devuelve con el error 400.
+     */
+    static String MensajeErrorTNS(JSONObject rta,String respuesta){
+        JSONObject datos=rta.optJSONObject("data");
+        if(datos!=null && !datos.optString("response").trim().isEmpty()){
+            return datos.optString("response").trim();
+        }
+        StringBuilder mensaje=new StringBuilder(rta.optString("message").trim());
+        JSONObject errores=rta.optJSONObject("errors");
+        if(errores!=null){
+            for (String campo : errores.keySet()) {
+                Object detalle=errores.opt(campo);
+                if(detalle instanceof JSONArray){
+                    JSONArray lista=(JSONArray) detalle;
+                    List<String> textos=new ArrayList<>();
+                    for (int i = 0; i < lista.length(); i++) {
+                        textos.add(lista.optString(i));
+                    }
+                    detalle=String.join(" / ", textos);
+                }
+                mensaje.append(" [").append(campo).append(": ").append(detalle).append("]");
+            }
+        }
+        if(mensaje.length()==0){
+            mensaje.append(rta.optString("title")).append(" ").append(rta.optString("detail"));
+        }
+        if(mensaje.toString().trim().isEmpty()){
+            return Recortar(respuesta);
+        }
+        return mensaje.toString().trim();
+    }
     static String Recortar(String texto){
         return texto.length()>200 ? texto.substring(0, 200) : texto;
     }
@@ -705,14 +738,11 @@ public class consularVentasEDSCaes {
         HttpUrl urlVenta=HttpUrl.parse(URLTNS+"/v2/facturacion/Ventas/Crear").newBuilder()
             .addQueryParameter("codigosucursal", sucursalTNS).build();
         Response response2 = EjecutarTNS(urlVenta, body);
-        JSONObject objRespues=LeerRespuestaTNS(response2.body().string());
+        String respuesta2=response2.body().string();
+        JSONObject objRespues=LeerRespuestaTNS(respuesta2);
         JSONObject datos=objRespues.optJSONObject("data");
         if (response2.code()!=200 || !objRespues.optBoolean("status") || (datos!=null && !datos.optBoolean("success"))){
-            String mensaje=objRespues.optString("message");
-            if(datos!=null && !datos.optString("response").isEmpty()){
-                mensaje=datos.optString("response");
-            }
-            GuardarLog("ERROR "+response2.code()+" "+mensaje+" en el recibo "+recibo);
+            GuardarLog("ERROR "+response2.code()+" "+MensajeErrorTNS(objRespues, respuesta2)+" en el recibo "+recibo);
             return false;
         }
         String factura=numero;

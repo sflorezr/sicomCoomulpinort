@@ -48,6 +48,7 @@ public class ReversarVentasPO {
     private static String motivo="REVERSION VENTA MAL SUBIDA";
     private static boolean usarFechaFactura=true;
     private static Set<String> reversadas=new HashSet<>();
+    private static final int ERRORESSEGUIDOS=5;
 
     private static JFrame ventana;
     private static JButton botonBuscar;
@@ -217,17 +218,28 @@ public class ReversarVentasPO {
             protected int[] doInBackground() throws Exception {
                 int reversadasOk=0;
                 int conError=0;
+                int erroresSeguidos=0;
                 for (int i = 0; i < facturas.size(); i++) {
+                    if(erroresSeguidos>=ERRORESSEGUIDOS && !ContinuarConErrores(erroresSeguidos)){
+                        consularVentasEDSCaes.GuardarLog("REVERSION DETENIDA POR EL USUARIO DESPUES DE "+erroresSeguidos+" ERRORES SEGUIDOS");
+                        break;
+                    }
+                    if(erroresSeguidos>=ERRORESSEGUIDOS){
+                        erroresSeguidos=0;
+                    }
                     JSONObject factura=facturas.get(i);
                     Estado("Reversando factura "+(i+1)+" de "+facturas.size()+"...");
                     try {
                         if(ReversarFactura(factura)){
                             reversadasOk++;
+                            erroresSeguidos=0;
                         }else{
                             conError++;
+                            erroresSeguidos++;
                         }
                     } catch (Exception e) {
                         conError++;
+                        erroresSeguidos++;
                         consularVentasEDSCaes.GuardarLog("ERROR REVERSANDO LA FACTURA "+NombreFactura(factura)+": "+consularVentasEDSCaes.CausaDe(e));
                     }
                     publish(i+1);
@@ -251,10 +263,25 @@ public class ReversarVentasPO {
                     return;
                 }
                 consularVentasEDSCaes.GuardarLog("FIN DE LA REVERSION. REVERSADAS: "+resultado[0]+" CON ERROR: "+resultado[1]);
-                Finalizar("Reversion terminada.\n\nFacturas procesadas: "+facturas.size()+"\nReversadas: "+resultado[0]+"\nCon error: "+resultado[1],
+                Finalizar("Reversion terminada.\n\nFacturas seleccionadas: "+facturas.size()+"\nReversadas: "+resultado[0]+"\nCon error: "+resultado[1],
                     resultado[1]>0 ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
             }
         }.execute();
+    }
+
+    /**
+     * Pregunta (desde el hilo de trabajo) si se continua despues de varios errores seguidos.
+     */
+    private static boolean ContinuarConErrores(int errores){
+        final int[] opcion={JOptionPane.NO_OPTION};
+        try {
+            SwingUtilities.invokeAndWait(() -> opcion[0]=JOptionPane.showConfirmDialog(ventana,
+                "Se presentaron "+errores+" errores seguidos al reversar (ver log).\n\nDesea continuar con las demas facturas?",
+                "Reversar ventas", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE));
+        } catch (Exception e) {
+            return false;
+        }
+        return opcion[0]==JOptionPane.YES_OPTION;
     }
 
     /**
@@ -300,9 +327,10 @@ public class ReversarVentasPO {
         devolucion.addProperty("motivo", motivo);
         devolucion.addProperty("fecha", fecha);
         devolucion.addProperty("fechaVence", fecha);
-        devolucion.addProperty("codTercero", detalle.optString("codigoTercero", factura.optString("codigoTercero")));
-        devolucion.addProperty("codVendedor", detalle.optString("codigoVendedor", factura.optString("codigoVendedor")));
-        devolucion.addProperty("codDespachar", detalle.optString("codigoDespachar", detalle.optString("codigoTercero")));
+        String tercero=Primero(detalle.optString("codigoTercero"), factura.optString("codigoTercero"));
+        devolucion.addProperty("codTercero", tercero);
+        devolucion.addProperty("codVendedor", Primero(detalle.optString("codigoVendedor"), factura.optString("codigoVendedor")));
+        devolucion.addProperty("codDespachar", Primero(detalle.optString("codigoDespachar"), tercero));
         devolucion.addProperty("codFormaPago", formaPago);
         devolucion.addProperty("plazoDias", 0);
         devolucion.addProperty("observacion", observacion);
@@ -312,7 +340,7 @@ public class ReversarVentasPO {
             JSONObject linea=lineas.getJSONObject(i);
             JsonObject item=new JsonObject();
             item.addProperty("codMat", linea.optString("codigoArticulo"));
-            item.addProperty("codBodega", linea.optString("codigoBodega"));
+            item.addProperty("codBodega", Primero(linea.optString("codigoBodega"), consularVentasEDSCaes.bodega));
             item.addProperty("cantidad", Numero(linea.optString("cantidad")));
             item.addProperty("tipoUnidad", "D");
             item.addProperty("descuento", 0);
@@ -337,14 +365,12 @@ public class ReversarVentasPO {
         HttpUrl urlDevolucion=HttpUrl.parse(consularVentasEDSCaes.URLTNS+"/v2/facturacion/Devolucion/Crear").newBuilder()
             .addQueryParameter("codigosucursal", consularVentasEDSCaes.sucursalTNS).build();
         Response response2=consularVentasEDSCaes.EjecutarTNS(urlDevolucion, body);
-        JSONObject rta=consularVentasEDSCaes.LeerRespuestaTNS(response2.body().string());
+        String respuesta2=response2.body().string();
+        JSONObject rta=consularVentasEDSCaes.LeerRespuestaTNS(respuesta2);
         JSONObject datos=rta.optJSONObject("data");
         if(response2.code()!=200 || !rta.optBoolean("status") || (datos!=null && !datos.optBoolean("success"))){
-            String mensaje=rta.optString("message");
-            if(datos!=null && !datos.optString("response").isEmpty()){
-                mensaje=datos.optString("response");
-            }
-            consularVentasEDSCaes.GuardarLog("ERROR "+response2.code()+" "+mensaje+" REVERSANDO LA FACTURA "+NombreFactura(factura));
+            consularVentasEDSCaes.GuardarLog("ERROR "+response2.code()+" "+consularVentasEDSCaes.MensajeErrorTNS(rta, respuesta2)+" REVERSANDO LA FACTURA "+NombreFactura(factura));
+            consularVentasEDSCaes.GuardarLog("    ENVIADO: "+new Gson().toJson(devolucion));
             return false;
         }
         String numeroDevolucion=numero;
@@ -356,19 +382,28 @@ public class ReversarVentasPO {
         return true;
     }
 
+    private static String Primero(String valor,String alterno){
+        return valor==null || valor.trim().isEmpty() ? alterno : valor.trim();
+    }
     private static String NombreFactura(JSONObject factura){
         return factura.optString("codigoPrefijo").trim()+factura.optString("numero").trim();
     }
     /**
-     * Convierte la fecha que devuelve TNS (yyyy-MM-dd..., dd/MM/yyyy...) a dd/MM/yyyy. Vacio si no se reconoce.
+     * Convierte la fecha que devuelve TNS (yyyy-MM-dd, yyyy/MM/dd, dd/MM/yyyy, dd-MM-yyyy) a dd/MM/yyyy. Vacio si no se reconoce.
      */
     static String FechaTNS(String fecha){
         fecha=fecha.trim();
         if(fecha.matches("^\\d{4}-\\d{2}-\\d{2}.*")){
             return fecha.substring(8, 10)+"/"+fecha.substring(5, 7)+"/"+fecha.substring(0, 4);
         }
+        if(fecha.matches("^\\d{4}/\\d{2}/\\d{2}.*")){
+            return fecha.substring(8, 10)+"/"+fecha.substring(5, 7)+"/"+fecha.substring(0, 4);
+        }
         if(fecha.matches("^\\d{2}/\\d{2}/\\d{4}.*")){
             return fecha.substring(0, 10);
+        }
+        if(fecha.matches("^\\d{2}-\\d{2}-\\d{4}.*")){
+            return fecha.substring(0, 10).replace("-", "/");
         }
         return "";
     }
