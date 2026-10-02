@@ -63,13 +63,14 @@ public class consularVentasEDSCaes {
     private static final String ARCHIVORECIBOS="recibos_subidos.txt";
     private static final String CONSUMIDORFINAL="222222222222";
     private static final DateTimeFormatter FORMATOFECHA=DateTimeFormatter.ofPattern("yyyy-MM-dd");
-    private static String URLTNS="https://api.tns.co";
+    static String URLTNS="https://api.tns.co";
     private static String url="";
     private static String idEstacion="";
     private static String usuarioTNS="";
     private static String passwordTNS="";    
     private static String empresaTNS="";  
-    private static String sucursalTNS="00";
+    static String sucursalTNS="00";
+    static Properties config=new Properties();
     private static String bodega="00";
     private static String centroCosto="00";
     private static String prefijo="FE";
@@ -107,7 +108,7 @@ public class consularVentasEDSCaes {
     /**
      * Lee caes.properties de la carpeta del jar. Si no existe crea una plantilla y avisa.
      */
-    private static Boolean CargarConfiguracion(){
+    static Boolean CargarConfiguracion(){
         File archivo=new File(CarpetaAplicacion(), ARCHIVOCONFIG);
         if(!archivo.exists()){
             try (Writer w=new OutputStreamWriter(new FileOutputStream(archivo), StandardCharsets.UTF_8)) {
@@ -135,7 +136,7 @@ public class consularVentasEDSCaes {
             JOptionPane.showMessageDialog(null, "Se creo el archivo de configuracion:\n"+archivo.getAbsolutePath()+"\n\nDiligencie los datos de conexion y vuelva a abrir el programa.", "Ventas Caes", JOptionPane.WARNING_MESSAGE);
             return false;
         }
-        Properties config=new Properties();
+        config=new Properties();
         try (Reader r=new InputStreamReader(new FileInputStream(archivo), StandardCharsets.UTF_8)) {
             config.load(r);
         } catch (IOException e) {
@@ -180,7 +181,7 @@ public class consularVentasEDSCaes {
     /**
      * Carpeta donde esta el jar (o la carpeta de trabajo si se ejecuta desde el IDE).
      */
-    private static File CarpetaAplicacion(){
+    static File CarpetaAplicacion(){
         try {
             File ubicacion=new File(consularVentasEDSCaes.class.getProtectionDomain().getCodeSource().getLocation().toURI());
             if(ubicacion.isFile()){
@@ -431,15 +432,22 @@ public class consularVentasEDSCaes {
         estado.setText("Proceso terminado. Log: "+(archivo!=null ? archivo.getName() : ""));
         HabilitarControles(true);
         JOptionPane.showMessageDialog(ventana, mensaje, "Ventas Caes", tipo);
-        if(archivo!=null){
-            try {
-                Desktop.getDesktop().open(archivo);
-            } catch (Exception e) {
-                if(AbrirConBlocDeNotas(archivo)){
-                    return;
-                }
-                JOptionPane.showMessageDialog(ventana, "No fue posible abrir el log:\n"+archivo.getAbsolutePath(), "Ventas Caes", JOptionPane.WARNING_MESSAGE);
+        AbrirArchivo(ventana, archivo);
+    }
+    /**
+     * Abre el archivo (log) con el programa predeterminado o con el Bloc de notas.
+     */
+    static void AbrirArchivo(java.awt.Component padre,File archivo){
+        if(archivo==null){
+            return;
+        }
+        try {
+            Desktop.getDesktop().open(archivo);
+        } catch (Exception e) {
+            if(AbrirConBlocDeNotas(archivo)){
+                return;
             }
+            JOptionPane.showMessageDialog(padre, "No fue posible abrir el log:\n"+archivo.getAbsolutePath(), "Ventas Caes", JOptionPane.WARNING_MESSAGE);
         }
     }
     private static Boolean AbrirConBlocDeNotas(File archivo){
@@ -453,7 +461,7 @@ public class consularVentasEDSCaes {
             return false;
         }
     }
-    private static String CausaDe(Exception e){
+    static String CausaDe(Exception e){
         Throwable causa=e.getCause()!=null ? e.getCause() : e;
         return causa.getClass().getSimpleName()+" "+causa.getMessage();
     }
@@ -547,13 +555,25 @@ public class consularVentasEDSCaes {
     }
 
     private static void AbrirLog() throws IOException{
+        AbrirLog("caes");
+    }
+    /**
+     * Crea logs/<nombre>_<fecha>.log en la carpeta del jar y devuelve el archivo.
+     */
+    static File AbrirLog(String nombre) throws IOException{
         File carpeta=new File(CarpetaAplicacion(), "logs");
         carpeta.mkdirs();
-        archivoLog=new File(carpeta, "caes_"+LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))+".log");
+        archivoLog=new File(carpeta, nombre+"_"+LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))+".log");
         log=new PrintWriter(new OutputStreamWriter(new FileOutputStream(archivoLog), StandardCharsets.UTF_8), true);
         tercerosConsultados.clear();
+        return archivoLog;
     }
-    private static synchronized void CerrarLog(){
+    static synchronized File CerrarLogYDevolverArchivo(){
+        File archivo=archivoLog;
+        CerrarLog();
+        return archivo;
+    }
+    static synchronized void CerrarLog(){
         if(log!=null){
             log.close();
             log=null;
@@ -593,7 +613,7 @@ public class consularVentasEDSCaes {
             return null;
         }
     }
-    private static String Recortar(String texto){
+    static String Recortar(String texto){
         return texto.length()>200 ? texto.substring(0, 200) : texto;
     }
 

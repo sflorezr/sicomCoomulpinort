@@ -66,3 +66,20 @@ task caesJar(type: Jar) {
     }
     exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
 }
+
+// Jar ejecutable para reversar en TNS las ventas de un prefijo (por defecto PO) con devoluciones.
+// Se genera con: gradlew reversarJar  (queda en build/libs/ReversarVentasPO.jar)
+task reversarJar(type: Jar) {
+    archiveBaseName = 'ReversarVentasPO'
+    archiveVersion = ''
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest {
+        attributes "Main-Class": "com.test.java.com.sergio.facelectronica.ReversarVentasPO"
+    }
+    from sourceSets.main.output
+    dependsOn configurations.runtimeClasspath
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+}
