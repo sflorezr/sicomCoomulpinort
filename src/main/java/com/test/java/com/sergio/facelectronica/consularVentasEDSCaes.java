@@ -55,7 +55,8 @@ import okhttp3.*;
  * Los datos de conexion se leen de caes.properties y el resultado queda en logs/caes_*.log,
  * ambos en la carpeta del jar. El numero de la factura lo asigna TNS (consecutivo del prefijo),
  * salvo en las ventas con factura electronica de la estacion, y los recibos ya subidos se registran
- * en recibos_subidos.txt para no subirlos de nuevo.
+ * en recibos_subidos.txt para no subirlos de nuevo. Antes de subir tambien se omiten los recibos
+ * que ya aparecen en la observacion de una factura de TNS (reporte ObtenerVentasDetallada).
  */
 public class consularVentasEDSCaes {
     private static final String ARCHIVOCONFIG="caes.properties";
@@ -72,6 +73,7 @@ public class consularVentasEDSCaes {
     private static String bodega="00";
     private static String centroCosto="00";
     private static String prefijo="FE";
+    private static DateTimeFormatter formatoFechaReporte=DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static String token="";
     private static String tokenTNS="";
     private static String json =null; 
@@ -123,7 +125,9 @@ public class consularVentasEDSCaes {
                     +"tns.sucursal=00\r\n"
                     +"tns.bodega=00\r\n"
                     +"tns.centroCosto=00\r\n"
-                    +"tns.prefijo=FE\r\n");
+                    +"tns.prefijo=FE\r\n"
+                    +"# formato de fecha del reporte ObtenerVentasDetallada (verificacion de duplicados)\r\n"
+                    +"tns.formatoFechaReporte=yyyy-MM-dd\r\n");
             } catch (IOException e) {
                 JOptionPane.showMessageDialog(null, "No fue posible crear el archivo "+archivo.getAbsolutePath()+"\n"+e.getMessage(), "Ventas Caes", JOptionPane.ERROR_MESSAGE);
                 return false;
@@ -159,6 +163,12 @@ public class consularVentasEDSCaes {
         bodega=config.getProperty("tns.bodega","00").trim();
         centroCosto=config.getProperty("tns.centroCosto","00").trim();
         prefijo=config.getProperty("tns.prefijo","FE").trim();
+        try {
+            formatoFechaReporte=DateTimeFormatter.ofPattern(config.getProperty("tns.formatoFechaReporte","yyyy-MM-dd").trim());
+        } catch (IllegalArgumentException e) {
+            JOptionPane.showMessageDialog(null, "El formato tns.formatoFechaReporte no es valido: "+e.getMessage(), "Ventas Caes", JOptionPane.ERROR_MESSAGE);
+            return false;
+        }
         return true;
     }
     private static String QuitarBarraFinal(String texto){
@@ -246,6 +256,9 @@ public class consularVentasEDSCaes {
         new SwingWorker<List<JSONObject>, Void>() {
             int diasConError=0;
             int yaSubidas=0;
+            int yaEnTNS=0;
+            boolean sinSesionTNS=false;
+            boolean sinVerificacionTNS=false;
             @Override
             protected List<JSONObject> doInBackground() throws Exception {
                 CargarRecibosSubidos();
@@ -271,7 +284,32 @@ public class consularVentasEDSCaes {
                     }
                     GuardarLog("DIA "+fecha.format(FORMATOFECHA)+": "+ventasDia.length()+" VENTAS");
                 }
-                return ventas;
+                if(ventas.isEmpty()){
+                    return ventas;
+                }
+                // ventas que ya existen en TNS (subidas por este u otro software): el recibo esta en la observacion
+                Estado("Iniciando sesion en TNS...");
+                if(!LoginTNS()){
+                    sinSesionTNS=true;
+                    return ventas;
+                }
+                Estado("Verificando en TNS las ventas ya existentes...");
+                Map<String,String> recibosEnTNS=ConsultarRecibosEnTNS(inicio, fin);
+                if(recibosEnTNS==null){
+                    sinVerificacionTNS=true;
+                    return ventas;
+                }
+                List<JSONObject> porSubir=new ArrayList<>();
+                for (JSONObject venta : ventas) {
+                    String factura=recibosEnTNS.get(NormalizarNumero(venta.optString("Recibo")));
+                    if(factura!=null){
+                        yaEnTNS++;
+                        GuardarLog("EL RECIBO "+venta.optString("Recibo").trim()+" YA EXISTE EN TNS EN LA FACTURA "+factura+", NO SE SUBE");
+                        continue;
+                    }
+                    porSubir.add(venta);
+                }
+                return porSubir;
             }
             @Override
             protected void done() {
@@ -285,10 +323,20 @@ public class consularVentasEDSCaes {
                     Finalizar("Ocurrio un error consultando las ventas.", JOptionPane.ERROR_MESSAGE);
                     return;
                 }
-                GuardarLog("TOTAL VENTAS POR SUBIR: "+ventas.size()+" (YA SUBIDAS ANTES: "+yaSubidas+")");
+                if(sinSesionTNS){
+                    Finalizar("No fue posible iniciar sesion en TNS. Revise los datos tns.* de "+ARCHIVOCONFIG+".", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                GuardarLog("TOTAL VENTAS POR SUBIR: "+ventas.size()+" (YA SUBIDAS ANTES: "+yaSubidas+", YA EXISTEN EN TNS: "+yaEnTNS+")");
                 String aviso="";
                 if(yaSubidas>0){
                     aviso+="\n"+yaSubidas+" venta(s) ya fueron subidas anteriormente y se omiten.";
+                }
+                if(yaEnTNS>0){
+                    aviso+="\n"+yaEnTNS+" venta(s) ya existen en TNS (recibo en la observacion) y se omiten.";
+                }
+                if(sinVerificacionTNS){
+                    aviso+="\n\nAtencion: no fue posible verificar en TNS si las ventas ya existen (ver log).\nSi continua podrian quedar ventas duplicadas.";
                 }
                 if(diasConError>0){
                     aviso+="\n\nAtencion: "+diasConError+" dia(s) no se pudieron consultar (ver log).";
@@ -413,6 +461,59 @@ public class consularVentasEDSCaes {
     /**
      * Registro local de recibos ya subidos a TNS (estacion;recibo;fecha;factura;fecha de carga).
      */
+    /**
+     * Consulta en TNS las facturas del rango (reporte ObtenerVentasDetallada) y devuelve los numeros
+     * que aparecen en su observacion, con la factura donde aparecen. Devuelve null si no se pudo consultar.
+     */
+    public static Map<String,String> ConsultarRecibosEnTNS(LocalDate inicio,LocalDate fin) throws IOException{
+        // se amplia un dia a cada lado porque la fecha de la factura puede diferir de la del recibo
+        HttpUrl urlReporte=HttpUrl.parse(URLTNS+"/v2/facturacion/Reportes/ObtenerVentasDetallada").newBuilder()
+            .addQueryParameter("fechaInicial", inicio.minusDays(1).format(formatoFechaReporte))
+            .addQueryParameter("fechaFin", fin.plusDays(1).format(formatoFechaReporte))
+            .addQueryParameter("codigosucursal", sucursalTNS).build();
+        Response response=EjecutarTNS(urlReporte, null);
+        String respuesta=response.body().string();
+        JSONArray filas=null;
+        try {
+            Object valor=new JSONTokener(respuesta.trim()).nextValue();
+            if(valor instanceof String){
+                valor=new JSONTokener(((String) valor).trim()).nextValue();
+            }
+            if(valor instanceof JSONArray){
+                filas=(JSONArray) valor;
+            }else if(valor instanceof JSONObject){
+                filas=((JSONObject) valor).optJSONArray("data");
+            }
+        } catch (JSONException e) {
+            filas=null;
+        }
+        if(response.code()!=200 || filas==null){
+            GuardarLog("ERROR "+response.code()+" CONSULTANDO EN TNS LAS VENTAS EXISTENTES: "+Recortar(respuesta));
+            return null;
+        }
+        Map<String,String> recibos=new HashMap<>();
+        for (int i = 0; i < filas.length(); i++) {
+            JSONObject fila=filas.optJSONObject(i);
+            if(fila==null){
+                continue;
+            }
+            String factura=fila.optString("codprefijo").trim()+fila.optString("numero").trim();
+            for (String numero : fila.optString("observ").split("[^0-9]+")) {
+                if(!numero.isEmpty()){
+                    recibos.putIfAbsent(NormalizarNumero(numero), factura);
+                }
+            }
+        }
+        GuardarLog("FACTURAS CONSULTADAS EN TNS PARA VERIFICAR DUPLICADOS: "+filas.length()+" LINEAS");
+        return recibos;
+    }
+    /**
+     * Quita espacios y ceros a la izquierda para comparar numeros de recibo.
+     */
+    private static String NormalizarNumero(String numero){
+        String limpio=numero.trim().replaceFirst("^0+(?=.)", "");
+        return limpio;
+    }
     private static File ArchivoRecibos(){
         return new File(CarpetaAplicacion(), ARCHIVORECIBOS);
     }
