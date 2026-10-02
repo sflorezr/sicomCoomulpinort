@@ -77,6 +77,10 @@ public class consularVentasEDSCaes {
     static String bancoTNS="00";
     private static String centroCosto="00";
     private static String prefijo="FE";
+    // S: antes de subir se omiten los recibos que ya aparecen en la observacion de una factura de TNS
+    static boolean validarObservacion=true;
+    // true cuando se ejecuta desde CaesVentasSinValidar.jar: no valida aunque caes.properties diga S
+    static boolean forzarSinValidar=false;
     private static DateTimeFormatter formatoFechaReporte=DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static String token="";
     private static String tokenTNS="";
@@ -135,7 +139,9 @@ public class consularVentasEDSCaes {
                     +"tns.banco=00\r\n"
                     +"tns.prefijo=FE\r\n"
                     +"# formato de fecha del reporte ObtenerVentasDetallada (verificacion de duplicados)\r\n"
-                    +"tns.formatoFechaReporte=yyyy-MM-dd\r\n");
+                    +"tns.formatoFechaReporte=yyyy-MM-dd\r\n"
+                    +"# S: no sube los recibos que ya aparecen en la observacion de una factura de TNS\r\n"
+                    +"tns.validarObservacion=S\r\n");
             } catch (IOException e) {
                 JOptionPane.showMessageDialog(null, "No fue posible crear el archivo "+archivo.getAbsolutePath()+"\n"+e.getMessage(), "Ventas Caes", JOptionPane.ERROR_MESSAGE);
                 return false;
@@ -176,6 +182,7 @@ public class consularVentasEDSCaes {
         prefijo=config.getProperty("tns.prefijo","FE").trim();
         try {
             formatoFechaReporte=DateTimeFormatter.ofPattern(config.getProperty("tns.formatoFechaReporte","yyyy-MM-dd").trim());
+            validarObservacion=!forzarSinValidar && !config.getProperty("tns.validarObservacion","S").trim().equalsIgnoreCase("N");
         } catch (IllegalArgumentException e) {
             JOptionPane.showMessageDialog(null, "El formato tns.formatoFechaReporte no es valido: "+e.getMessage(), "Ventas Caes", JOptionPane.ERROR_MESSAGE);
             return false;
@@ -203,7 +210,7 @@ public class consularVentasEDSCaes {
     }
 
     private static void CrearVentana(){
-        ventana=new JFrame("Ventas Caes a TNS");
+        ventana=new JFrame("Ventas Caes a TNS"+(validarObservacion ? "" : " (sin validar observacion)"));
         ventana.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         JPanel panel=new JPanel(new GridBagLayout());
         panel.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
@@ -302,6 +309,10 @@ public class consularVentasEDSCaes {
                 Estado("Iniciando sesion en TNS...");
                 if(!LoginTNS()){
                     sinSesionTNS=true;
+                    return ventas;
+                }
+                if(!validarObservacion){
+                    GuardarLog("NO SE VALIDA SI LOS RECIBOS YA EXISTEN EN LA OBSERVACION DE LAS FACTURAS DE TNS");
                     return ventas;
                 }
                 Estado("Verificando en TNS las ventas ya existentes...");

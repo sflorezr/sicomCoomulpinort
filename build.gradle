@@ -83,3 +83,20 @@ task reversarJar(type: Jar) {
     }
     exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
 }
+
+// Jar del cargador Caes que no valida si el recibo ya existe en la observacion de las facturas de TNS.
+// Se genera con: gradlew caesSinValidarJar  (queda en build/libs/CaesVentasSinValidar.jar)
+task caesSinValidarJar(type: Jar) {
+    archiveBaseName = 'CaesVentasSinValidar'
+    archiveVersion = ''
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest {
+        attributes "Main-Class": "com.test.java.com.sergio.facelectronica.consularVentasEDSCaesSinValidar"
+    }
+    from sourceSets.main.output
+    dependsOn configurations.runtimeClasspath
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+}
