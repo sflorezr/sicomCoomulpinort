@@ -72,6 +72,9 @@ public class consularVentasEDSCaes {
     static String sucursalTNS="00";
     static Properties config=new Properties();
     static String bodega="00";
+    static String talla="00";
+    static String color="00";
+    static String bancoTNS="00";
     private static String centroCosto="00";
     private static String prefijo="FE";
     private static DateTimeFormatter formatoFechaReporte=DateTimeFormatter.ofPattern("yyyy-MM-dd");
@@ -126,6 +129,10 @@ public class consularVentasEDSCaes {
                     +"tns.sucursal=00\r\n"
                     +"tns.bodega=00\r\n"
                     +"tns.centroCosto=00\r\n"
+                    +"# codigos que TNS exige aunque el articulo no los maneje\r\n"
+                    +"tns.talla=00\r\n"
+                    +"tns.color=00\r\n"
+                    +"tns.banco=00\r\n"
                     +"tns.prefijo=FE\r\n"
                     +"# formato de fecha del reporte ObtenerVentasDetallada (verificacion de duplicados)\r\n"
                     +"tns.formatoFechaReporte=yyyy-MM-dd\r\n");
@@ -163,6 +170,9 @@ public class consularVentasEDSCaes {
         sucursalTNS=config.getProperty("tns.sucursal","00").trim();
         bodega=config.getProperty("tns.bodega","00").trim();
         centroCosto=config.getProperty("tns.centroCosto","00").trim();
+        talla=config.getProperty("tns.talla","00").trim();
+        color=config.getProperty("tns.color","00").trim();
+        bancoTNS=config.getProperty("tns.banco","00").trim();
         prefijo=config.getProperty("tns.prefijo","FE").trim();
         try {
             formatoFechaReporte=DateTimeFormatter.ofPattern(config.getProperty("tns.formatoFechaReporte","yyyy-MM-dd").trim());
@@ -683,7 +693,7 @@ public class consularVentasEDSCaes {
         }
         String banco=ObtenerCampo(sale, "Kilometraje").trim();
         if(banco.isEmpty()){
-            banco="00";
+            banco=bancoTNS;
         }
         String fechaVentaString=sale.getString("HoraFin").split("T")[0];
         fechaVentaString=fechaVentaString.substring(8, 10)+'/'+fechaVentaString.substring(5, 7)+'/'+fechaVentaString.substring(0, 4);
@@ -713,8 +723,8 @@ public class consularVentasEDSCaes {
         venta.addProperty("codigoCentroCosto", centroCosto);
         itempedido.addProperty("codMat",matidString);
         itempedido.addProperty("codBodega", bodega);
-        itempedido.addProperty("codTalla", "");
-        itempedido.addProperty("codColor", "");
+        itempedido.addProperty("codTalla", talla);
+        itempedido.addProperty("codColor", color);
         itempedido.addProperty("cantidad", Cantidad);
         itempedido.addProperty("tipoUnidad", "D");
         itempedido.addProperty("descuento", 0);

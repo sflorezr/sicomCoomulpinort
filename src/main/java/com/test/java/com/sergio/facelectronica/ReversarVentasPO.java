@@ -39,6 +39,7 @@ import okhttp3.*;
  *   reversar.prefijoDevolucion=00            prefijo de las devoluciones
  *   reversar.motivo=REVERSION VENTA MAL SUBIDA
  *   reversar.usarFechaFactura=S              S: devolucion con la fecha de la factura, N: con la fecha actual
+ * El banco, la talla y el color se toman de tns.banco, tns.talla y tns.color (por defecto 00).
  * Las facturas reversadas se registran en reversadas_<prefijo>.txt para no reversarlas dos veces,
  * y el resultado queda en logs/reversar_*.log.
  */
@@ -332,6 +333,7 @@ public class ReversarVentasPO {
         devolucion.addProperty("codVendedor", Primero(detalle.optString("codigoVendedor"), factura.optString("codigoVendedor")));
         devolucion.addProperty("codDespachar", Primero(detalle.optString("codigoDespachar"), tercero));
         devolucion.addProperty("codFormaPago", formaPago);
+        devolucion.addProperty("codBanco", consularVentasEDSCaes.bancoTNS);
         devolucion.addProperty("plazoDias", 0);
         devolucion.addProperty("observacion", observacion);
         JsonArray detallePedido=new JsonArray();
@@ -341,6 +343,8 @@ public class ReversarVentasPO {
             JsonObject item=new JsonObject();
             item.addProperty("codMat", linea.optString("codigoArticulo"));
             item.addProperty("codBodega", Primero(linea.optString("codigoBodega"), consularVentasEDSCaes.bodega));
+            item.addProperty("codTalla", consularVentasEDSCaes.talla);
+            item.addProperty("codColor", consularVentasEDSCaes.color);
             item.addProperty("cantidad", Numero(linea.optString("cantidad")));
             item.addProperty("tipoUnidad", "D");
             item.addProperty("descuento", 0);
