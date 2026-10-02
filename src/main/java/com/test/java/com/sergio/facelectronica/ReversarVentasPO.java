@@ -39,6 +39,9 @@ import okhttp3.*;
  *   reversar.prefijoDevolucion=00            prefijo de las devoluciones
  *   reversar.motivo=01                       codigo del motivo de devolucion en TNS (si no esta, se pide en pantalla)
  *   reversar.usarFechaFactura=S              S: devolucion con la fecha de la factura, N: con la fecha actual
+ *   reversar.referencia=auto                 como se indica la factura devuelta: prefijo-en-numero
+ *                                            (numeroFacturaDevolucion=PO123), prefijo-factura (devolucion con el
+ *                                            prefijo de la factura), solo-numero; auto prueba en ese orden
  * El banco, la talla y el color se toman de tns.banco, tns.talla y tns.color (por defecto 00).
  * Las facturas reversadas se registran en reversadas_<prefijo>.txt para no reversarlas dos veces,
  * y el resultado queda en logs/reversar_*.log.
@@ -50,6 +53,9 @@ public class ReversarVentasPO {
     private static boolean usarFechaFactura=true;
     private static Set<String> reversadas=new HashSet<>();
     private static final int ERRORESSEGUIDOS=5;
+    // formas de indicar a TNS la factura que se devuelve, en el orden en que se prueban
+    private static final String[] FORMASREFERENCIA={"prefijo-en-numero", "prefijo-factura", "solo-numero"};
+    private static String formaReferencia=null;
 
     private static JFrame ventana;
     private static JButton botonBuscar;
@@ -67,6 +73,10 @@ public class ReversarVentasPO {
                 prefijoFacturas=consularVentasEDSCaes.config.getProperty("reversar.prefijo","PO").trim();
                 prefijoDevolucion=consularVentasEDSCaes.config.getProperty("reversar.prefijoDevolucion","00").trim();
                 motivo=consularVentasEDSCaes.config.getProperty("reversar.motivo","").trim();
+                String forma=consularVentasEDSCaes.config.getProperty("reversar.referencia","auto").trim();
+                if(java.util.Arrays.asList(FORMASREFERENCIA).contains(forma)){
+                    formaReferencia=forma;
+                }
                 usarFechaFactura=!consularVentasEDSCaes.config.getProperty("reversar.usarFechaFactura","S").trim().equalsIgnoreCase("N");
                 CrearVentana();
             }else{
@@ -386,9 +396,7 @@ public class ReversarVentasPO {
             observacion=observacion.substring(0, 200);
         }
         JsonObject devolucion=new JsonObject();
-        devolucion.addProperty("codigoPrefijo", prefijoDevolucion);
         devolucion.addProperty("numero", numero);
-        devolucion.addProperty("numeroFacturaDevolucion", numero);
         devolucion.addProperty("motivo", motivo);
         devolucion.addProperty("fecha", fecha);
         devolucion.addProperty("fechaVence", fecha);
@@ -429,25 +437,46 @@ public class ReversarVentasPO {
         detalleFormaPago.add(pago);
         devolucion.add("detalleFormaPago", detalleFormaPago);
 
-        RequestBody body=RequestBody.create(MediaType.parse("application/json"), new Gson().toJson(devolucion));
         HttpUrl urlDevolucion=HttpUrl.parse(consularVentasEDSCaes.URLTNS+"/v2/facturacion/Devolucion/Crear").newBuilder()
             .addQueryParameter("codigosucursal", consularVentasEDSCaes.sucursalTNS).build();
-        Response response2=consularVentasEDSCaes.EjecutarTNS(urlDevolucion, body);
-        String respuesta2=response2.body().string();
-        JSONObject rta=consularVentasEDSCaes.LeerRespuestaTNS(respuesta2);
-        JSONObject datos=rta.optJSONObject("data");
-        if(response2.code()!=200 || !rta.optBoolean("status") || (datos!=null && !datos.optBoolean("success"))){
-            consularVentasEDSCaes.GuardarLog("ERROR "+response2.code()+" "+consularVentasEDSCaes.MensajeErrorTNS(rta, respuesta2)+" REVERSANDO LA FACTURA "+NombreFactura(factura));
-            consularVentasEDSCaes.GuardarLog("    ENVIADO: "+new Gson().toJson(devolucion));
-            return false;
+        String prefijoFactura=factura.optString("codigoPrefijo").trim();
+        // el Swagger no indica como se referencia la factura: mientras no se conozca la forma se prueban
+        // las variantes en orden (un rechazo de TNS no crea nada) y se usa la primera que TNS acepte
+        String[] formas=formaReferencia!=null ? new String[]{formaReferencia} : FORMASREFERENCIA;
+        for (int intento = 0; intento < formas.length; intento++) {
+            String forma=formas[intento];
+            String prefijoDv=forma.equals("prefijo-factura") ? prefijoFactura : prefijoDevolucion;
+            devolucion.addProperty("codigoPrefijo", prefijoDv);
+            devolucion.addProperty("numeroFacturaDevolucion", forma.equals("prefijo-en-numero") ? prefijoFactura+numero : numero);
+            RequestBody body=RequestBody.create(MediaType.parse("application/json"), new Gson().toJson(devolucion));
+            Response response2=consularVentasEDSCaes.EjecutarTNS(urlDevolucion, body);
+            String respuesta2=response2.body().string();
+            JSONObject rta=consularVentasEDSCaes.LeerRespuestaTNS(respuesta2);
+            JSONObject datos=rta.optJSONObject("data");
+            if(response2.code()!=200 || !rta.optBoolean("status") || (datos!=null && !datos.optBoolean("success"))){
+                String mensaje=consularVentasEDSCaes.MensajeErrorTNS(rta, respuesta2);
+                boolean facturaNoEncontrada=mensaje.toLowerCase().contains("no existe") && mensaje.toLowerCase().contains("factura");
+                if(formaReferencia==null && facturaNoEncontrada && intento<formas.length-1){
+                    consularVentasEDSCaes.GuardarLog("TNS NO ENCONTRO LA FACTURA "+NombreFactura(factura)+" CON LA FORMA '"+forma+"', SE PRUEBA LA SIGUIENTE");
+                    continue;
+                }
+                consularVentasEDSCaes.GuardarLog("ERROR "+response2.code()+" "+mensaje+" REVERSANDO LA FACTURA "+NombreFactura(factura));
+                consularVentasEDSCaes.GuardarLog("    ENVIADO: "+new Gson().toJson(devolucion));
+                return false;
+            }
+            if(formaReferencia==null){
+                formaReferencia=forma;
+                consularVentasEDSCaes.GuardarLog("FORMA DE REFERENCIAR LA FACTURA ACEPTADA POR TNS: '"+forma+"' (prefijo devolucion "+prefijoDv+", numeroFacturaDevolucion "+devolucion.get("numeroFacturaDevolucion").getAsString()+")");
+            }
+            String numeroDevolucion=numero;
+            if(datos!=null && !datos.optString("consecutivo").trim().isEmpty()){
+                numeroDevolucion=datos.optString("consecutivo").trim();
+            }
+            RegistrarReversada(factura, prefijoDv+numeroDevolucion);
+            consularVentasEDSCaes.GuardarLog("FACTURA "+NombreFactura(factura)+" REVERSADA CON LA DEVOLUCION "+prefijoDv+numeroDevolucion);
+            return true;
         }
-        String numeroDevolucion=numero;
-        if(datos!=null && !datos.optString("consecutivo").trim().isEmpty()){
-            numeroDevolucion=datos.optString("consecutivo").trim();
-        }
-        RegistrarReversada(factura, prefijoDevolucion+numeroDevolucion);
-        consularVentasEDSCaes.GuardarLog("FACTURA "+NombreFactura(factura)+" REVERSADA CON LA DEVOLUCION "+prefijoDevolucion+numeroDevolucion);
-        return true;
+        return false;
     }
 
     private static String Primero(String valor,String alterno){
