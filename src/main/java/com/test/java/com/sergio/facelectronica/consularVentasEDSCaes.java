@@ -57,6 +57,8 @@ import okhttp3.*;
  * salvo en las ventas con factura electronica de la estacion, y los recibos ya subidos se registran
  * en recibos_subidos.txt para no subirlos de nuevo. Antes de subir tambien se omiten los recibos
  * que ya aparecen en la observacion de una factura de TNS (reporte ObtenerVentasDetallada).
+ * Como en Monterrey, las ventas de credito se crean como remision (/v2/Facturacion/Remision/Crear,
+ * prefijo tns.prefijoRemision) con el numero del recibo.
  */
 public class consularVentasEDSCaes {
     private static final String ARCHIVOCONFIG="caes.properties";
@@ -77,6 +79,7 @@ public class consularVentasEDSCaes {
     static String bancoTNS="00";
     private static String centroCosto="00";
     private static String prefijo="FE";
+    private static String prefijoRemision="PO";
     // S: antes de subir se omiten los recibos que ya aparecen en la observacion de una factura de TNS
     static boolean validarObservacion=true;
     // true cuando se ejecuta desde CaesVentasSinValidar.jar: no valida aunque caes.properties diga S
@@ -138,6 +141,8 @@ public class consularVentasEDSCaes {
                     +"tns.color=00\r\n"
                     +"tns.banco=00\r\n"
                     +"tns.prefijo=FE\r\n"
+                    +"# prefijo de las remisiones (ventas de credito)\r\n"
+                    +"tns.prefijoRemision=PO\r\n"
                     +"# formato de fecha del reporte ObtenerVentasDetallada (verificacion de duplicados)\r\n"
                     +"tns.formatoFechaReporte=yyyy-MM-dd\r\n"
                     +"# S: no sube los recibos que ya aparecen en la observacion de una factura de TNS\r\n"
@@ -180,6 +185,7 @@ public class consularVentasEDSCaes {
         color=config.getProperty("tns.color","00").trim();
         bancoTNS=config.getProperty("tns.banco","00").trim();
         prefijo=config.getProperty("tns.prefijo","FE").trim();
+        prefijoRemision=config.getProperty("tns.prefijoRemision","PO").trim();
         try {
             formatoFechaReporte=DateTimeFormatter.ofPattern(config.getProperty("tns.formatoFechaReporte","yyyy-MM-dd").trim());
             validarObservacion=!forzarSinValidar && !config.getProperty("tns.validarObservacion","S").trim().equalsIgnoreCase("N");
@@ -672,7 +678,9 @@ public class consularVentasEDSCaes {
     }
 
     /**
-     * Sube una venta a TNS con la logica de consularVentasSauceMonterrey. Devuelve true si TNS la acepto.
+     * Sube una venta a TNS con la logica de consularVentasSauceMonterrey: las ventas de credito
+     * (sin factura electronica de la estacion) se crean como remision (RS) con el numero del recibo,
+     * y las demas como factura de venta (FV). Devuelve true si TNS la acepto.
      */
     public static Boolean SubirVenta(JSONObject sale) throws IOException{
         String teridString=ConsultarTerid(sale,"cliente");  
@@ -702,6 +710,17 @@ public class consularVentasEDSCaes {
         if(formapago.equals("CR")){
             plazoDias="15";
         }
+        // como en Monterrey: credito -> remision con el numero del recibo
+        boolean esRemision=formapago.equals("CR");
+        String prefijoDocumento=prefijo;
+        String tipoDocumento="FACTURA";
+        String rutaDocumento="/v2/facturacion/Ventas/Crear";
+        if(esRemision){
+            prefijoDocumento=prefijoRemision;
+            numero=recibo;
+            tipoDocumento="REMISION";
+            rutaDocumento="/v2/Facturacion/Remision/Crear";
+        }
         String banco=ObtenerCampo(sale, "Kilometraje").trim();
         if(banco.isEmpty()){
             banco=bancoTNS;
@@ -720,7 +739,7 @@ public class consularVentasEDSCaes {
         JsonObject itempedido = new JsonObject();
         JsonArray itemsFormaPago = new JsonArray();
         JsonObject itemformapago = new JsonObject();
-        venta.addProperty("codigoPrefijo", prefijo); 
+        venta.addProperty("codigoPrefijo", prefijoDocumento); 
         venta.addProperty("numero", numero);
         venta.addProperty("fecha", fechaVentaString);  
         venta.addProperty("codTercero", teridString);    
@@ -756,22 +775,22 @@ public class consularVentasEDSCaes {
         Gson gson = new GsonBuilder().setPrettyPrinting().create();
         json = gson.toJson(venta);
         RequestBody body = RequestBody.create(MediaType.parse("application/json"), json);
-        HttpUrl urlVenta=HttpUrl.parse(URLTNS+"/v2/facturacion/Ventas/Crear").newBuilder()
+        HttpUrl urlVenta=HttpUrl.parse(URLTNS+rutaDocumento).newBuilder()
             .addQueryParameter("codigosucursal", sucursalTNS).build();
         Response response2 = EjecutarTNS(urlVenta, body);
         String respuesta2=response2.body().string();
         JSONObject objRespues=LeerRespuestaTNS(respuesta2);
         JSONObject datos=objRespues.optJSONObject("data");
         if (response2.code()!=200 || !objRespues.optBoolean("status") || (datos!=null && !datos.optBoolean("success"))){
-            GuardarLog("ERROR "+response2.code()+" "+MensajeErrorTNS(objRespues, respuesta2)+" en el recibo "+recibo);
+            GuardarLog("ERROR "+response2.code()+" "+MensajeErrorTNS(objRespues, respuesta2)+" en el recibo "+recibo+" ("+tipoDocumento+" "+prefijoDocumento+")");
             return false;
         }
         String factura=numero;
         if(datos!=null && !datos.optString("consecutivo").trim().isEmpty()){
             factura=datos.optString("consecutivo").trim();
         }
-        RegistrarReciboSubido(sale, fechaVentaString, prefijo+factura);
-        GuardarLog("RECIBO "+recibo+" SUBIDO A TNS COMO FACTURA "+prefijo+factura);
+        RegistrarReciboSubido(sale, fechaVentaString, prefijoDocumento+factura);
+        GuardarLog("RECIBO "+recibo+" SUBIDO A TNS COMO "+tipoDocumento+" "+prefijoDocumento+factura);
         return true;
     }
 
