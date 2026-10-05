@@ -59,8 +59,8 @@ import okhttp3.*;
  * salvo en las ventas con factura electronica de la estacion, y los recibos ya subidos se registran
  * en recibos_subidos.txt para no subirlos de nuevo. Antes de subir tambien se omiten los recibos
  * que ya aparecen en la observacion de una factura de TNS (reporte ObtenerVentasDetallada).
- * Como en Monterrey, las ventas de credito se crean como remision (/v2/Facturacion/Remision/Crear,
- * prefijo tns.prefijoRemision) con el numero del recibo.
+ * Las ventas con forma de pago "Credito Ilimitado" se crean como remision (/v2/Facturacion/Remision/Crear,
+ * prefijo tns.prefijoRemision) con el numero del recibo; las demas como factura de venta.
  */
 public class consularVentasEDSCaes {
     private static final String ARCHIVOCONFIG="caes.properties";
@@ -902,30 +902,36 @@ public class consularVentasEDSCaes {
     }
 
     /**
-     * Sube una venta a TNS con la logica de consularVentasSauceMonterrey: las ventas de credito
-     * (sin factura electronica de la estacion) se crean como remision (RS) con el numero del recibo,
-     * y las demas como factura de venta (FV). Devuelve true si TNS la acepto.
+     * Sube una venta a TNS: las de forma de pago "Credito Ilimitado" (sin factura electronica de la
+     * estacion) se crean como remision (RS) con el numero del recibo, y las demas como factura de
+     * venta (FV). Devuelve true si TNS la acepto.
      */
     /**
-     * Logica de Monterrey: sin factura electronica de la estacion, es credito si Kilometraje no es 6
-     * o algun pago es "Credito". Las ventas de credito se suben como remision.
+     * Solo es remision (credito) la venta que tiene algun pago cuya forma contenga "Credito Ilimitado"
+     * (sin distinguir mayusculas ni tildes); todo lo demas se sube como factura de venta.
+     * Las ventas con factura electronica de la estacion siempre son factura.
      */
     static boolean EsVentaCredito(JSONObject sale){
         if(sale.optJSONArray("FacturacionElectronica")!=null){
             return false;
         }
-        if(!ObtenerCampo(sale, "Kilometraje").equals("6")){
-            return true;
-        }
         JSONArray pagos=sale.optJSONArray("Pagos");
         if(pagos!=null){
             for (int j = 0; j < pagos.length(); j++) {
-                if(pagos.getJSONObject(j).optString("FormaPago").contains("Credito")){
+                JSONObject pago=pagos.optJSONObject(j);
+                if(pago!=null && SinTildes(pago.optString("FormaPago")).contains("credito ilimitado")){
                     return true;
                 }
             }
         }
         return false;
+    }
+    /**
+     * Minusculas, sin tildes y con un solo espacio entre palabras, para comparar formas de pago.
+     */
+    static String SinTildes(String texto){
+        return java.text.Normalizer.normalize(texto, java.text.Normalizer.Form.NFD)
+            .replaceAll("\\p{M}", "").toLowerCase().trim().replaceAll("\\s+", " ");
     }
     /**
      * Banco segun la forma de pago de la venta: Efectivo -> 01, Consignacion -> 6, Tarjeta -> 7.
@@ -942,8 +948,7 @@ public class consularVentasEDSCaes {
                 if(pago==null){
                     continue;
                 }
-                String forma=java.text.Normalizer.normalize(pago.optString("FormaPago"), java.text.Normalizer.Form.NFD)
-                    .replaceAll("\\p{M}", "").toLowerCase();
+                String forma=SinTildes(pago.optString("FormaPago"));
                 String codigo="";
                 if(forma.contains("efectivo")){
                     codigo="01";
@@ -974,7 +979,7 @@ public class consularVentasEDSCaes {
         String plazoDias="0";
         String numero="";
         String recibo=sale.getString("Recibo").trim();
-        // forma de pago con la misma logica de Monterrey
+        // credito ilimitado -> forma de pago credito (remision)
         if(sale.get("FacturacionElectronica").equals(null)){
             if(EsVentaCredito(sale)){
                 formapago="CR";
@@ -987,7 +992,7 @@ public class consularVentasEDSCaes {
         if(formapago.equals("CR")){
             plazoDias="15";
         }
-        // como en Monterrey: credito -> remision con el numero del recibo
+        // credito ilimitado -> remision con el numero del recibo
         boolean esRemision=formapago.equals("CR");
         String prefijoDocumento=prefijo;
         String tipoDocumento="FACTURA";
