@@ -527,7 +527,21 @@ public class consularVentasEDSCaes {
             +"\nFecha: "+fecha
             +"\nProducto: "+(producto!=null ? producto.optString("Nombre").trim() : "")
             +"\nTotal: $"+String.format("%,.2f", total)
+            +"\nForma de pago: "+FormasDePago(venta)+" (banco "+BancoDeFormaPago(venta)+")"
             +"\n\nSe subira como "+(EsVentaCredito(venta) ? "REMISION (credito) prefijo "+prefijoRemision : "FACTURA prefijo "+prefijo);
+    }
+    private static String FormasDePago(JSONObject venta){
+        List<String> formas=new ArrayList<>();
+        JSONArray pagos=venta.optJSONArray("Pagos");
+        if(pagos!=null){
+            for (int j = 0; j < pagos.length(); j++) {
+                JSONObject pago=pagos.optJSONObject(j);
+                if(pago!=null && !pago.optString("FormaPago").trim().isEmpty()){
+                    formas.add(pago.optString("FormaPago").trim());
+                }
+            }
+        }
+        return formas.isEmpty() ? "SIN PAGOS" : String.join(", ", formas);
     }
     private static String PrimerCampo(JSONObject objeto,String... campos){
         for (String campo : campos) {
@@ -913,6 +927,45 @@ public class consularVentasEDSCaes {
         }
         return false;
     }
+    /**
+     * Banco segun la forma de pago de la venta: Efectivo -> 01, Consignacion -> 6, Tarjeta -> 7.
+     * Si hay varios pagos se usa el de mayor valor que tenga una de esas formas.
+     * Si ninguna coincide se usa Kilometraje y, si viene vacio, tns.banco.
+     */
+    static String BancoDeFormaPago(JSONObject sale){
+        String banco="";
+        double mayorValor=-1;
+        JSONArray pagos=sale.optJSONArray("Pagos");
+        if(pagos!=null){
+            for (int j = 0; j < pagos.length(); j++) {
+                JSONObject pago=pagos.optJSONObject(j);
+                if(pago==null){
+                    continue;
+                }
+                String forma=java.text.Normalizer.normalize(pago.optString("FormaPago"), java.text.Normalizer.Form.NFD)
+                    .replaceAll("\\p{M}", "").toLowerCase();
+                String codigo="";
+                if(forma.contains("efectivo")){
+                    codigo="01";
+                }else if(forma.contains("consignacion")){
+                    codigo="6";
+                }else if(forma.contains("tarjeta")){
+                    codigo="7";
+                }
+                if(!codigo.isEmpty() && pago.optDouble("Valor", 0)>mayorValor){
+                    banco=codigo;
+                    mayorValor=pago.optDouble("Valor", 0);
+                }
+            }
+        }
+        if(banco.isEmpty()){
+            banco=ObtenerCampo(sale, "Kilometraje").trim();
+        }
+        if(banco.isEmpty()){
+            banco=bancoTNS;
+        }
+        return banco;
+    }
     public static Boolean SubirVenta(JSONObject sale) throws IOException{
         String teridString=ConsultarTerid(sale,"cliente");  
         String vendedorIdString=ConsultarTerid(sale, "vendedor");
@@ -945,10 +998,7 @@ public class consularVentasEDSCaes {
             tipoDocumento="REMISION";
             rutaDocumento="/v2/Facturacion/Remision/Crear";
         }
-        String banco=ObtenerCampo(sale, "Kilometraje").trim();
-        if(banco.isEmpty()){
-            banco=bancoTNS;
-        }
+        String banco=BancoDeFormaPago(sale);
         String fechaVentaString=sale.getString("HoraFin").split("T")[0];
         fechaVentaString=fechaVentaString.substring(8, 10)+'/'+fechaVentaString.substring(5, 7)+'/'+fechaVentaString.substring(0, 4);
         String matidString=BuscarMaterialAPI(sale.getJSONObject("Producto").getString("Nombre"));
