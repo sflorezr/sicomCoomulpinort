@@ -32,7 +32,9 @@ import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
+import javax.swing.JSeparator;
 import javax.swing.JSpinner;
+import javax.swing.JTextField;
 import javax.swing.SpinnerDateModel;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
@@ -97,6 +99,8 @@ public class consularVentasEDSCaes {
     private static JSpinner fechaInicial;
     private static JSpinner fechaFinal;
     private static JButton botonProcesar;
+    private static JTextField campoRecibo;
+    private static JButton botonRecibo;
     private static JProgressBar barra;
     private static JLabel estado;
 
@@ -232,12 +236,21 @@ public class consularVentasEDSCaes {
         botonProcesar=new JButton("Procesar");
         botonProcesar.addActionListener(e -> Procesar());
         c.gridx=0; c.gridy=2; c.gridwidth=2; panel.add(botonProcesar, c);
+        c.gridy=3; panel.add(new JSeparator(), c);
+        campoRecibo=new JTextField();
+        campoRecibo.addActionListener(e -> ImportarRecibo());
+        c.gridwidth=1;
+        c.gridx=0; c.gridy=4; panel.add(new JLabel("Recibo:"), c);
+        c.gridx=1; panel.add(campoRecibo, c);
+        botonRecibo=new JButton("Importar recibo");
+        botonRecibo.addActionListener(e -> ImportarRecibo());
+        c.gridx=0; c.gridy=5; c.gridwidth=2; panel.add(botonRecibo, c);
         barra=new JProgressBar();
         barra.setStringPainted(true);
         barra.setString("");
-        c.gridy=3; panel.add(barra, c);
-        estado=new JLabel("Seleccione el rango de fechas y presione Procesar.");
-        c.gridy=4; panel.add(estado, c);
+        c.gridy=6; panel.add(barra, c);
+        estado=new JLabel("Seleccione el rango de fechas o digite un recibo.");
+        c.gridy=7; panel.add(estado, c);
         ventana.getContentPane().add(panel, BorderLayout.CENTER);
         ventana.pack();
         ventana.setSize(Math.max(ventana.getWidth(), 460), ventana.getHeight());
@@ -387,6 +400,183 @@ public class consularVentasEDSCaes {
     }
 
     /**
+     * Importa una sola venta por su numero de recibo (api/Estaciones/{id}/venta/recibo/{recibo}),
+     * sin rango de fechas. Muestra los datos de la venta y pide confirmacion antes de subirla.
+     */
+    private static void ImportarRecibo(){
+        String recibo=campoRecibo.getText().trim();
+        if(recibo.isEmpty()){
+            JOptionPane.showMessageDialog(ventana, "Digite el numero de recibo a importar.", "Ventas Caes", JOptionPane.WARNING_MESSAGE);
+            campoRecibo.requestFocus();
+            return;
+        }
+        if(!botonRecibo.isEnabled()){
+            return;
+        }
+        try {
+            AbrirLog();
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(ventana, "No fue posible crear el archivo de log.\n"+e.getMessage(), "Ventas Caes", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        GuardarLog("INICIO DE LA IMPORTACION DEL RECIBO "+recibo+" ESTACION "+idEstacion);
+        HabilitarControles(false);
+        barra.setIndeterminate(true);
+        barra.setString("Consultando recibo...");
+        new SwingWorker<JSONObject, Void>() {
+            boolean yaSubido=false;
+            String facturaEnTNS=null;
+            boolean sinSesionTNS=false;
+            boolean sinVerificacionTNS=false;
+            @Override
+            protected JSONObject doInBackground() throws Exception {
+                CargarRecibosSubidos();
+                Estado("Consultando el recibo "+recibo+"...");
+                JSONObject venta=ConsultarVentaRecibo(recibo);
+                if(venta==null){
+                    return null;
+                }
+                yaSubido=recibosSubidos.contains(LlaveRecibo(venta));
+                Estado("Iniciando sesion en TNS...");
+                if(!LoginTNS()){
+                    sinSesionTNS=true;
+                    return venta;
+                }
+                if(validarObservacion){
+                    Estado("Verificando en TNS si el recibo ya existe...");
+                    LocalDate fecha=LocalDate.now();
+                    try {
+                        fecha=LocalDate.parse(venta.optString("HoraFin").split("T")[0]);
+                    } catch (Exception e) {
+                    }
+                    Map<String,String> recibosEnTNS=ConsultarRecibosEnTNS(fecha, fecha);
+                    if(recibosEnTNS==null){
+                        sinVerificacionTNS=true;
+                    }else{
+                        facturaEnTNS=recibosEnTNS.get(NormalizarNumero(venta.optString("Recibo")));
+                    }
+                }
+                return venta;
+            }
+            @Override
+            protected void done() {
+                barra.setIndeterminate(false);
+                barra.setString("");
+                JSONObject venta;
+                try {
+                    venta=get();
+                } catch (Exception e) {
+                    GuardarLog("ERROR CONSULTANDO EL RECIBO "+recibo+": "+CausaDe(e));
+                    Finalizar("Ocurrio un error consultando el recibo "+recibo+".", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                if(venta==null){
+                    Finalizar("No se encontro el recibo "+recibo+" en la estacion "+idEstacion+" (ver log).", JOptionPane.WARNING_MESSAGE);
+                    return;
+                }
+                if(sinSesionTNS){
+                    Finalizar("No fue posible iniciar sesion en TNS. Revise los datos tns.* de "+ARCHIVOCONFIG+".", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                String aviso="";
+                if(yaSubido){
+                    aviso+="\n\nAtencion: este recibo ya fue subido anteriormente desde este equipo ("+ARCHIVORECIBOS+").";
+                }
+                if(facturaEnTNS!=null){
+                    aviso+="\n\nAtencion: el recibo ya aparece en TNS en la factura "+facturaEnTNS+".";
+                }
+                if(sinVerificacionTNS){
+                    aviso+="\n\nAtencion: no fue posible verificar en TNS si el recibo ya existe (ver log).";
+                }
+                Object[] opciones={"Importar", "Cancelar"};
+                int opcion=JOptionPane.showOptionDialog(ventana,
+                    "Datos de la venta:\n\n"+ResumenVenta(venta)+aviso+"\n\nDesea importar esta venta a TNS?",
+                    "Confirmar importacion", JOptionPane.DEFAULT_OPTION,
+                    aviso.isEmpty() ? JOptionPane.QUESTION_MESSAGE : JOptionPane.WARNING_MESSAGE,
+                    null, opciones, aviso.isEmpty() ? opciones[0] : opciones[1]);
+                if(opcion!=0){
+                    GuardarLog("IMPORTACION DEL RECIBO "+recibo+" CANCELADA POR EL USUARIO");
+                    Finalizar("Importacion cancelada. No se subio la venta.", JOptionPane.INFORMATION_MESSAGE);
+                    return;
+                }
+                List<JSONObject> ventas=new ArrayList<>();
+                ventas.add(venta);
+                SubirVentas(ventas);
+            }
+        }.execute();
+    }
+    /**
+     * Texto con los datos principales de la venta para la confirmacion.
+     */
+    static String ResumenVenta(JSONObject venta){
+        JSONObject empleado=venta.optJSONObject("Empleado");
+        JSONObject producto=venta.optJSONObject("Producto");
+        String fecha=venta.optString("HoraFin").replace("T", " ");
+        if(fecha.length()>16){
+            fecha=fecha.substring(0, 16);
+        }
+        double total=venta.optDouble("Valor", 0);
+        return "Id: "+PrimerCampo(venta, "Id", "IdVenta", "IdRegistroVenta", "Consecutivo")
+            +"\nRecibo: "+venta.optString("Recibo").trim()
+            +"\nPlaca: "+venta.optString("Placa").trim()
+            +"\nVendedor: "+(empleado!=null ? empleado.optString("Nombre").trim() : "")
+            +"\nKilometraje: "+ObtenerCampo(venta, "Kilometraje")
+            +"\nFecha: "+fecha
+            +"\nProducto: "+(producto!=null ? producto.optString("Nombre").trim() : "")
+            +"\nTotal: $"+String.format("%,.2f", total)
+            +"\n\nSe subira como "+(EsVentaCredito(venta) ? "REMISION (credito) prefijo "+prefijoRemision : "FACTURA prefijo "+prefijo);
+    }
+    private static String PrimerCampo(JSONObject objeto,String... campos){
+        for (String campo : campos) {
+            String valor=ObtenerCampo(objeto, campo).trim();
+            if(!valor.isEmpty()){
+                return valor;
+            }
+        }
+        return "";
+    }
+    /**
+     * Consulta una venta por numero de recibo en el API de la estacion. Devuelve null si no existe o hubo error.
+     */
+    public static JSONObject ConsultarVentaRecibo(String recibo) throws IOException{
+        OkHttpClient.Builder builder = new OkHttpClient.Builder();
+        builder = configureToIgnoreCertificate(builder);
+        builder.connectTimeout(5, TimeUnit.MINUTES).writeTimeout(5, TimeUnit.MINUTES).readTimeout(5, TimeUnit.MINUTES);
+        OkHttpClient client=builder.build();
+        HttpUrl urlRecibo=HttpUrl.parse(url+"/api/Estaciones/"+idEstacion+"/venta/recibo").newBuilder()
+            .addPathSegment(recibo).build();
+        Request request = new Request.Builder().url(urlRecibo).get()
+        .addHeader("Authorization", "Basic "+token)
+        .addHeader("Content-Type", "application/json")
+        .addHeader("Accept", "application/json").build();
+        try (Response response = client.newCall(request).execute()) {
+            String respuesta=response.body().string();
+            if(response.code()!=200){
+                GuardarLog("ERROR "+response.code()+" CONSULTANDO EL RECIBO "+recibo+": "+Recortar(respuesta));
+                return null;
+            }
+            // la venta puede venir en Resultado (objeto o lista) o directamente
+            Object valor=new JSONTokener(respuesta.trim()).nextValue();
+            if(valor instanceof JSONObject && ((JSONObject) valor).has("Resultado")){
+                valor=((JSONObject) valor).get("Resultado");
+            }
+            if(valor instanceof JSONArray){
+                valor=((JSONArray) valor).length()>0 ? ((JSONArray) valor).get(0) : null;
+            }
+            if(!(valor instanceof JSONObject) || !((JSONObject) valor).has("Recibo")){
+                GuardarLog("NO SE ENCONTRO EL RECIBO "+recibo+" EN LA ESTACION: "+Recortar(respuesta));
+                return null;
+            }
+            JSONObject venta=(JSONObject) valor;
+            GuardarLog("RECIBO "+recibo+" ENCONTRADO: "+ResumenVenta(venta).replace("\n", " | "));
+            return venta;
+        } catch (JSONException e) {
+            GuardarLog("ERROR LEYENDO EL RECIBO "+recibo+": "+e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Paso 2: sube las ventas confirmadas a TNS mostrando el avance.
      */
     private static void SubirVentas(List<JSONObject> ventas){
@@ -447,6 +637,8 @@ public class consularVentasEDSCaes {
 
     private static void HabilitarControles(boolean habilitar){
         botonProcesar.setEnabled(habilitar);
+        botonRecibo.setEnabled(habilitar);
+        campoRecibo.setEnabled(habilitar);
         fechaInicial.setEnabled(habilitar);
         fechaFinal.setEnabled(habilitar);
     }
@@ -682,6 +874,27 @@ public class consularVentasEDSCaes {
      * (sin factura electronica de la estacion) se crean como remision (RS) con el numero del recibo,
      * y las demas como factura de venta (FV). Devuelve true si TNS la acepto.
      */
+    /**
+     * Logica de Monterrey: sin factura electronica de la estacion, es credito si Kilometraje no es 6
+     * o algun pago es "Credito". Las ventas de credito se suben como remision.
+     */
+    static boolean EsVentaCredito(JSONObject sale){
+        if(sale.optJSONArray("FacturacionElectronica")!=null){
+            return false;
+        }
+        if(!ObtenerCampo(sale, "Kilometraje").equals("6")){
+            return true;
+        }
+        JSONArray pagos=sale.optJSONArray("Pagos");
+        if(pagos!=null){
+            for (int j = 0; j < pagos.length(); j++) {
+                if(pagos.getJSONObject(j).optString("FormaPago").contains("Credito")){
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
     public static Boolean SubirVenta(JSONObject sale) throws IOException{
         String teridString=ConsultarTerid(sale,"cliente");  
         String vendedorIdString=ConsultarTerid(sale, "vendedor");
@@ -692,15 +905,8 @@ public class consularVentasEDSCaes {
         String recibo=sale.getString("Recibo").trim();
         // forma de pago con la misma logica de Monterrey
         if(sale.get("FacturacionElectronica").equals(null)){
-            if(!ObtenerCampo(sale, "Kilometraje").equals("6")){
+            if(EsVentaCredito(sale)){
                 formapago="CR";
-            }
-            if(!sale.get("Pagos").equals(null)){
-                for (int j = 0; j < sale.getJSONArray("Pagos").length(); j++) {
-                    if(sale.getJSONArray("Pagos").getJSONObject(j).getString("FormaPago").contains("Credito")){
-                        formapago="CR";
-                    }                       
-                }
             }
             // el numero lo asigna TNS con el consecutivo del prefijo
             numero="";
