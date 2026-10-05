@@ -400,7 +400,7 @@ public class consularVentasEDSCaes {
     }
 
     /**
-     * Importa una sola venta por su numero de recibo (api/Estaciones/{id}/venta/recibo/{recibo}),
+     * Importa una sola venta por su numero de recibo (api/Estaciones/{id}/venta/localizador/{recibo}),
      * sin rango de fechas. Muestra los datos de la venta y pide confirmacion antes de subirla.
      */
     private static void ImportarRecibo(){
@@ -479,6 +479,9 @@ public class consularVentasEDSCaes {
                     return;
                 }
                 String aviso="";
+                if(venta.optBoolean("EsAnulado")){
+                    aviso+="\n\nAtencion: la venta esta ANULADA en la estacion.";
+                }
                 if(yaSubido){
                     aviso+="\n\nAtencion: este recibo ya fue subido anteriormente desde este equipo ("+ARCHIVORECIBOS+").";
                 }
@@ -516,7 +519,7 @@ public class consularVentasEDSCaes {
             fecha=fecha.substring(0, 16);
         }
         double total=venta.optDouble("Valor", 0);
-        return "Id: "+PrimerCampo(venta, "Id", "IdVenta", "IdRegistroVenta", "Consecutivo")
+        return "Id: "+PrimerCampo(venta, "IdRegistroVenta", "Id", "IdVenta")
             +"\nRecibo: "+venta.optString("Recibo").trim()
             +"\nPlaca: "+venta.optString("Placa").trim()
             +"\nVendedor: "+(empleado!=null ? empleado.optString("Nombre").trim() : "")
@@ -536,14 +539,15 @@ public class consularVentasEDSCaes {
         return "";
     }
     /**
-     * Consulta una venta por numero de recibo en el API de la estacion. Devuelve null si no existe o hubo error.
+     * Consulta una venta por numero de recibo (localizador) en el API de la estacion.
+     * La respuesta trae la venta en Resultado (lista). Devuelve null si no existe o hubo error.
      */
     public static JSONObject ConsultarVentaRecibo(String recibo) throws IOException{
         OkHttpClient.Builder builder = new OkHttpClient.Builder();
         builder = configureToIgnoreCertificate(builder);
         builder.connectTimeout(5, TimeUnit.MINUTES).writeTimeout(5, TimeUnit.MINUTES).readTimeout(5, TimeUnit.MINUTES);
         OkHttpClient client=builder.build();
-        HttpUrl urlRecibo=HttpUrl.parse(url+"/api/Estaciones/"+idEstacion+"/venta/recibo").newBuilder()
+        HttpUrl urlRecibo=HttpUrl.parse(url+"/api/Estaciones/"+idEstacion+"/venta/localizador").newBuilder()
             .addPathSegment(recibo).build();
         Request request = new Request.Builder().url(urlRecibo).get()
         .addHeader("Authorization", "Basic "+token)
@@ -561,7 +565,21 @@ public class consularVentasEDSCaes {
                 valor=((JSONObject) valor).get("Resultado");
             }
             if(valor instanceof JSONArray){
-                valor=((JSONArray) valor).length()>0 ? ((JSONArray) valor).get(0) : null;
+                JSONArray lista=(JSONArray) valor;
+                valor=null;
+                // si vienen varias ventas se toma la del recibo digitado
+                for (int i = 0; i < lista.length() && valor==null; i++) {
+                    JSONObject candidata=lista.optJSONObject(i);
+                    if(candidata!=null && NormalizarNumero(candidata.optString("Recibo")).equals(NormalizarNumero(recibo))){
+                        valor=candidata;
+                    }
+                }
+                if(valor==null && lista.length()>0){
+                    valor=lista.get(0);
+                }
+                if(lista.length()>1){
+                    GuardarLog("LA CONSULTA DEL RECIBO "+recibo+" DEVOLVIO "+lista.length()+" VENTAS, SE TOMA LA DEL RECIBO "+((JSONObject) valor).optString("Recibo"));
+                }
             }
             if(!(valor instanceof JSONObject) || !((JSONObject) valor).has("Recibo")){
                 GuardarLog("NO SE ENCONTRO EL RECIBO "+recibo+" EN LA ESTACION: "+Recortar(respuesta));
