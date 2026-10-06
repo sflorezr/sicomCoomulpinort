@@ -142,6 +142,7 @@ public class TerpelPosPoblado {
     String bancoId="";
     String formapago="";
     String consecutivo="";
+    Boolean esRemision=false;
     Float precioBaseFloat=(float) 0;
     Float Cantidad=(float) 0;
     Integer Cant=0;
@@ -188,6 +189,7 @@ public class TerpelPosPoblado {
                 observaciones="";
                 formapago="";
                 referencia="";
+                esRemision=false;
                 sale=obj.getJSONArray("data").getJSONObject(i);  
                 System.out.println(sale.getString("consecutivo_factura"));
                 if (BuscarVenta(sale)) {
@@ -226,7 +228,9 @@ public class TerpelPosPoblado {
                         }
                         
                     }
-                    if(sale.getString("metodo_pago").contains("CLIENTES")||sale.getString("metodo_pago").contains("FALABELLA")||sale.getString("metodo_pago").contains("BIG")){
+                    String metodoPagoUpper=sale.getString("metodo_pago").toUpperCase();
+                    esRemision=metodoPagoUpper.contains("CLIENTES")||metodoPagoUpper.contains("FALABELLA")||metodoPagoUpper.contains("BIG");
+                    if(esRemision){
                         codcomp="RS";
                         prefijo="FV";
                         vendedorIdString=ConsultarTerceroxPlaca(sale );
@@ -240,7 +244,11 @@ public class TerpelPosPoblado {
                         consecutivo=numEntero.toString();
                     }else{
                         consecutivo="1";
-                    }  
+                        Tns.actualizar("insert into consecutivo(codcomp,codprefijo,consecutivo) values('"+codcomp+"','"+prefijo+"','0')");
+                    }
+                    while(!ConsultarVenta(codcomp,consecutivo,prefijo).isEmpty()){
+                        consecutivo=String.valueOf(Integer.parseInt(consecutivo)+1);
+                    }
               
 
                     fechaVentaString=sale.getString("fecha");
@@ -299,6 +307,10 @@ public class TerpelPosPoblado {
                         formapago="CO";
                         bancoId=BuscarBanco("VIVE");
                     }                    
+                    if(esRemision){
+                        formapago="CR";
+                        bancoId="1";
+                    }
                     observaciones=observaciones+" medio de pago: "+sale.getString("metodo_pago");
                     fechaVentaString=fechaVentaString.substring(5, 7)+'/'+fechaVentaString.substring(8, 10)+'/'+fechaVentaString.substring(0, 4);
                     sqlString="insert into kardex(codcomp,codprefijo,numero,nrofactven,observ,fecha,periodo,cenid,areadid,sucid,cliente,vendedor,formapago,bcoid,ajustebase,ajusteiva,ajusteneto,vrbase,vriva,total,fpcontado,fpcredito,despachar_a,factorconv,vrtotal,neto,netobase,hora,fecha_terpel)"+
@@ -335,6 +347,11 @@ public class TerpelPosPoblado {
                     if(!codcomp.equals("XX")){
                         Tns.actualizar(sqlString);
                         kardexidString=ConsultarVenta(codcomp,consecutivo,prefijo);
+                        if(kardexidString.isEmpty()){
+                            GuardarLog("NO SE PUDO GRABAR "+codcomp+" "+prefijo+" "+consecutivo+" DE LA FACTURA "+sale.getString("consecutivo_factura")+" ("+sale.getString("metodo_pago")+")");
+                            Tns.actualizar("update varios set contenido='"+Integer.toString(i+1)+"' where variab='CANTIDADTERPELSUBIDA'");
+                            continue;
+                        }
                         if(formapago.equals("MU")){
                             InsertarFormapago(sale,kardexidString,teridString);
                         }
@@ -440,6 +457,11 @@ public class TerpelPosPoblado {
                               ")";
                               Tns.actualizar(sqlString);
                               kardexidString=ConsultarVenta(codcomp,numero,prefijo);
+                              if(kardexidString.isEmpty()){
+                                  GuardarLog("NO SE PUDO GRABAR LA REMISION "+prefijo+" "+numero);
+                                  ActualizarCantidad();
+                                  continue;
+                              }
                               for (int i = 0; i < sale.getJSONArray("producto").length(); i++) {
                                 articulo=sale.getJSONArray("producto").getJSONObject(i);
                                 if(BuscarMaterialCredito(articulo,"1")){
@@ -618,7 +640,7 @@ public class TerpelPosPoblado {
     public static Boolean BuscarRemision(String codcomp,String codprefijo,String numero) throws ClassNotFoundException, SQLException{
         Boolean existe=false;
         
-        sqlString="select kardexid from kardex where observ like '"+numero+"%'"; 
+        sqlString="select kardexid from kardex where observ like '"+numero+" %'"; 
 
         ResultSet rs = Tns.consultar(sqlString);
         while (rs.next()){
@@ -629,7 +651,7 @@ public class TerpelPosPoblado {
     public static String ConsultaRemision(String codcomp,String codprefijo,String numero) throws ClassNotFoundException, SQLException{
         String kardexid="";
         
-        sqlString="select kardexid from kardex where observ like '"+numero+"%'"; 
+        sqlString="select kardexid from kardex where observ like '"+numero+" %'"; 
 
         ResultSet rs = Tns.consultar(sqlString);
         while (rs.next()){
@@ -657,7 +679,7 @@ public class TerpelPosPoblado {
         }
                                           
 
-        sqlString="select kardexid from kardex where fecha='"+fecha+"' and observ like '%"+numero+"%'"; 
+        sqlString="select kardexid from kardex where fecha='"+fecha+"' and (observ like '"+ventaJsonObject.getString("consecutivo_factura").trim()+" %' or observ like '"+numero+" %')"; 
 
         ResultSet rs = Tns.consultar(sqlString);
         while (rs.next()){
