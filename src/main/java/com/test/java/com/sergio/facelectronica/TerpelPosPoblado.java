@@ -227,10 +227,9 @@ public class TerpelPosPoblado {
                         prefijo="00";
                         vendedorIdString=ConsultarTerceroxPlaca(sale );
                     }     
-                    if(esRemision){
-                        // la remision lleva el numero de la factura: "FEE - 395216" -> 395216
-                        String[] partesFactura=sale.getString("consecutivo_factura").split("-");
-                        consecutivo=partesFactura[partesFactura.length-1].replaceAll("[^0-9]", "");
+                    if(!codcomp.equals("DV")){
+                        // FV y RS llevan el numero de la factura: "FEE - 395216" -> 395216
+                        consecutivo=numero.replaceAll("[^0-9]", "");
                     }else{
                         sqlString="select CONSECUTIVO from CONSECUTIVO where codcomp='"+codcomp+"' and codprefijo='"+prefijo+"'";
                         rsD=Tns.consultar(sqlString);
@@ -391,7 +390,7 @@ public class TerpelPosPoblado {
                    
                    //System.out.println(i +" de "+obj.getJSONArray("data").length()+1); 
                 }
-                if(!esRemision){
+                if(codcomp.equals("DV")){
                     Tns.actualizar("update consecutivo set consecutivo='"+consecutivo+"' where codcomp='"+codcomp+"' and codprefijo='"+prefijo+"'");
                 }
                 Tns.actualizar("update varios set contenido='"+Integer.toString(i+1)+"' where variab='CANTIDADTERPELSUBIDA'");
