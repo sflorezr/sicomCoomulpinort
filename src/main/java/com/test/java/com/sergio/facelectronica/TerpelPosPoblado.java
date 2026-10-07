@@ -224,7 +224,7 @@ public class TerpelPosPoblado {
                     esRemision=metodoPagoUpper.contains("CLIENTES")||metodoPagoUpper.contains("FALABELLA")||metodoPagoUpper.contains("BIG");
                     if(esRemision){
                         codcomp="RS";
-                        prefijo="FV";
+                        prefijo="00";
                         vendedorIdString=ConsultarTerceroxPlaca(sale );
                     }     
                     sqlString="select CONSECUTIVO from CONSECUTIVO where codcomp='"+codcomp+"' and codprefijo='"+prefijo+"'";
