@@ -212,21 +212,13 @@ public class TerpelPosPoblado {
                         numero=sale.get("consecutivo_factura").toString();
                         prefijo="00";
                     }
+                    codcomp="FV";
                     if(sale.getString("tipo_factura").equals("NC")){
                         codcomp="DV";
                         referencia=sale.getString("referencia").trim();
                         referencia=referencia.replaceAll(" ", "");
                         referencia=referencia.replaceAll("-", "");
                         referencia=referencia.substring(2);                        
-                    }else{
-                        if(sale.getString("tipo_factura").contains("FE")){
-                            codcomp="FV";
-                            prefijo="FV";
-                        }else{
-                            codcomp="FV";
-                            prefijo="FV";
-                        }
-                        
                     }
                     String metodoPagoUpper=sale.getString("metodo_pago").toUpperCase();
                     esRemision=metodoPagoUpper.contains("CLIENTES")||metodoPagoUpper.contains("FALABELLA")||metodoPagoUpper.contains("BIG");
