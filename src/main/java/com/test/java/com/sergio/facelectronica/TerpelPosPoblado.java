@@ -6,7 +6,12 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.security.cert.CertificateException;
 import java.sql.SQLException;
+import java.text.Normalizer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.sql.ResultSet;
 import javax.net.ssl.HostnameVerifier;
@@ -718,6 +723,13 @@ public class TerpelPosPoblado {
         String teridString="";
         String nombre="";
         if(tipo.equals("cliente")){
+            if (venta.getString("numero_documento_fe").equals("0")
+                    && venta.getString("metodo_pago").toUpperCase().contains("CLIENTES")){
+                teridString=BuscarTerceroPorNombre(venta.getString("nombre_cliente"));
+                if(!teridString.isEmpty()){
+                    return teridString;
+                }
+            }
             if (venta.getString("numero_documento_fe").equals("0")){
                 sqlString="select terid from terceros where nombre like '%"+venta.getString("nombre_cliente")+"%'";
             }else{
@@ -777,6 +789,111 @@ public class TerpelPosPoblado {
 
         return teridString;
     }
+    private static final Set<String> PALABRAS_IGNORADAS = new HashSet<>(Arrays.asList(
+        "S","A","SA","SAS","LTDA","LTD","EU","E","U","CIA","Y","DE","DEL","LA","LAS","LOS","EL","EN","CI","SC","ZOMAC"));
+
+    // "Transportes Gomez  S.A.S." -> [TRANSPORTES, GOMEZ] (sin tildes ni signos)
+    private static List<String> PalabrasNombre(String nombre){
+        String limpio=Normalizer.normalize(nombre==null?"":nombre, Normalizer.Form.NFD)
+            .replaceAll("\\p{M}", "")
+            .toUpperCase()
+            .replaceAll("[^A-Z0-9 ]", " ")
+            .trim();
+        List<String> palabras=new ArrayList<>();
+        for (String palabra : limpio.split("\\s+")) {
+            if(!palabra.isEmpty() && !PALABRAS_IGNORADAS.contains(palabra) && !palabras.contains(palabra)){
+                palabras.add(palabra);
+            }
+        }
+        return palabras;
+    }
+
+    private static int Levenshtein(String a,String b){
+        int[] previo=new int[b.length()+1];
+        int[] actual=new int[b.length()+1];
+        for (int j = 0; j <= b.length(); j++) { previo[j]=j; }
+        for (int i = 1; i <= a.length(); i++) {
+            actual[0]=i;
+            for (int j = 1; j <= b.length(); j++) {
+                int costo=a.charAt(i-1)==b.charAt(j-1)?0:1;
+                actual[j]=Math.min(Math.min(actual[j-1]+1, previo[j]+1), previo[j-1]+costo);
+            }
+            int[] tmp=previo; previo=actual; actual=tmp;
+        }
+        return previo[b.length()];
+    }
+
+    // dos palabras se consideran iguales si son identicas o, cuando son largas, difieren en una letra (RODRIGUES/RODRIGUEZ)
+    private static boolean PalabrasParecidas(String a,String b){
+        if(a.equals(b)){ return true; }
+        return a.length()>=5 && b.length()>=5 && Levenshtein(a,b)<=1;
+    }
+
+    private static int PalabrasEnComun(List<String> a,List<String> b){
+        int comunes=0;
+        for (String palabra : a) {
+            for (String otra : b) {
+                if(PalabrasParecidas(palabra, otra)){ comunes++; break; }
+            }
+        }
+        return comunes;
+    }
+
+    /**
+     * Busca el tercero por nombre cuando la venta no trae documento.
+     * Compara por palabras (sin tildes, mayusculas, sin S.A.S/LTDA, en cualquier orden):
+     * acepta el candidato si contiene todas las palabras del nombre de Terpel o si
+     * coinciden al menos el 80% de las palabras. Si hay empate entre varios terceros
+     * no elige ninguno para no cargar la venta a otro cliente.
+     */
+    public static String BuscarTerceroPorNombre(String nombreCliente) throws ClassNotFoundException, SQLException{
+        List<String> palabrasCliente=PalabrasNombre(nombreCliente);
+        if(palabrasCliente.isEmpty()){ return ""; }
+
+        StringBuilder filtro=new StringBuilder();
+        for (String palabra : palabrasCliente) {
+            if(palabra.length()<3){ continue; }
+            if(filtro.length()>0){ filtro.append(" or "); }
+            filtro.append("upper(nombre) like '%").append(palabra.substring(0, Math.min(palabra.length(), 4))).append("%'");
+        }
+        if(filtro.length()==0){ return ""; }
+
+        String mejorTerid="";
+        String mejorNombre="";
+        double mejorPuntaje=0;
+        boolean empate=false;
+        ResultSet rs=Tns.consultar("select first 500 terid,nombre from terceros where "+filtro);
+        while(rs.next()){
+            List<String> palabrasTercero=PalabrasNombre(rs.getString("nombre"));
+            if(palabrasTercero.isEmpty()){ continue; }
+            int comunes=PalabrasEnComun(palabrasCliente, palabrasTercero);
+            double dice=2.0*comunes/(palabrasCliente.size()+palabrasTercero.size());
+            boolean contieneTodas=comunes==palabrasCliente.size();
+            if(!contieneTodas && dice<0.8){ continue; }
+            if(dice>mejorPuntaje+0.0001){
+                mejorPuntaje=dice;
+                mejorTerid=rs.getString("terid");
+                mejorNombre=rs.getString("nombre");
+                empate=false;
+            }else if(Math.abs(dice-mejorPuntaje)<=0.0001 && !rs.getString("terid").equals(mejorTerid)){
+                empate=true;
+            }
+        }
+        String nombreLog=nombreCliente.replace("'", "");
+        if(mejorTerid.isEmpty()){
+            GuardarLog("NO SE ENCONTRO EL TERCERO POR NOMBRE: "+nombreLog);
+            return "";
+        }
+        if(empate){
+            GuardarLog("VARIOS TERCEROS PARECIDOS A "+nombreLog+", NO SE ASIGNO NINGUNO");
+            return "";
+        }
+        if(!PalabrasNombre(mejorNombre).equals(palabrasCliente)){
+            GuardarLog("TERCERO "+nombreLog+" ASIGNADO POR PARECIDO A "+mejorNombre.replace("'", ""));
+        }
+        return mejorTerid;
+    }
+
     public static void GuardarLog(String observacionString) throws SQLException{
         Tns.actualizar("INSERT INTO LOGTERPEL(FECHA,OBSERVACIONES)values('now','"+observacionString+"')");
     }
