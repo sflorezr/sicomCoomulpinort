@@ -227,19 +227,25 @@ public class TerpelPosPoblado {
                         prefijo="00";
                         vendedorIdString=ConsultarTerceroxPlaca(sale );
                     }     
-                    sqlString="select CONSECUTIVO from CONSECUTIVO where codcomp='"+codcomp+"' and codprefijo='"+prefijo+"'";
-                    rsD=Tns.consultar(sqlString);
-                    if (rsD.next()){
-                        consecutivo=rsD.getString("CONSECUTIVO");
-                        Integer numEntero = Integer.parseInt(consecutivo);
-                        numEntero=numEntero+1;    
-                        consecutivo=numEntero.toString();
+                    if(esRemision){
+                        // la remision lleva el numero de la factura: "FEE - 395216" -> 395216
+                        String[] partesFactura=sale.getString("consecutivo_factura").split("-");
+                        consecutivo=partesFactura[partesFactura.length-1].replaceAll("[^0-9]", "");
                     }else{
-                        consecutivo="1";
-                        Tns.actualizar("insert into consecutivo(codcomp,codprefijo,consecutivo) values('"+codcomp+"','"+prefijo+"','0')");
-                    }
-                    while(!ConsultarVenta(codcomp,consecutivo,prefijo).isEmpty()){
-                        consecutivo=String.valueOf(Integer.parseInt(consecutivo)+1);
+                        sqlString="select CONSECUTIVO from CONSECUTIVO where codcomp='"+codcomp+"' and codprefijo='"+prefijo+"'";
+                        rsD=Tns.consultar(sqlString);
+                        if (rsD.next()){
+                            consecutivo=rsD.getString("CONSECUTIVO");
+                            Integer numEntero = Integer.parseInt(consecutivo);
+                            numEntero=numEntero+1;    
+                            consecutivo=numEntero.toString();
+                        }else{
+                            consecutivo="1";
+                            Tns.actualizar("insert into consecutivo(codcomp,codprefijo,consecutivo) values('"+codcomp+"','"+prefijo+"','0')");
+                        }
+                        while(!ConsultarVenta(codcomp,consecutivo,prefijo).isEmpty()){
+                            consecutivo=String.valueOf(Integer.parseInt(consecutivo)+1);
+                        }
                     }
               
 
@@ -385,7 +391,9 @@ public class TerpelPosPoblado {
                    
                    //System.out.println(i +" de "+obj.getJSONArray("data").length()+1); 
                 }
-                Tns.actualizar("update consecutivo set consecutivo='"+consecutivo+"' where codcomp='"+codcomp+"' and codprefijo='"+prefijo+"'");
+                if(!esRemision){
+                    Tns.actualizar("update consecutivo set consecutivo='"+consecutivo+"' where codcomp='"+codcomp+"' and codprefijo='"+prefijo+"'");
+                }
                 Tns.actualizar("update varios set contenido='"+Integer.toString(i+1)+"' where variab='CANTIDADTERPELSUBIDA'");
             }
              creditos=ConsultarCredito(fechaString, fechaFinString, establecimiento);
