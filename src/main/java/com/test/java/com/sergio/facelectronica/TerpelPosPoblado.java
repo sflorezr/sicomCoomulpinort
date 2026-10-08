@@ -286,7 +286,7 @@ public class TerpelPosPoblado {
                         if(sale.getString("metodo_pago").contains("EFECTIVO")){
                             bancoId="1";
                         }else{
-                            if(sale.getString("metodo_pago").contains("TARJET")){                                
+                            if(sale.getString("metodo_pago").contains("TARJET")||sale.getString("metodo_pago").toUpperCase().contains("TRANSFERENCIA")){                                
                                 formapago="CO";  
                                 bancoId=BuscarBanco("BANCOLOMBIA");
                             }else{
