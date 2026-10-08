@@ -81,6 +81,7 @@ public class consularVentasEDSCaes {
     static String talla="00";
     static String color="00";
     static String bancoTNS="00";
+    static boolean enviarTallaColor=false;
     private static String centroCosto="00";
     private static String prefijo="FE";
     private static String prefijoRemision="PO";
@@ -149,7 +150,9 @@ public class consularVentasEDSCaes {
                     +"tns.sucursal=00\r\n"
                     +"tns.bodega=00\r\n"
                     +"tns.centroCosto=00\r\n"
-                    +"# codigos que TNS exige aunque el articulo no los maneje\r\n"
+                    +"# talla y color: se usan en las devoluciones (ReversarVentasPO); en ventas y\r\n"
+                    +"# remisiones solo se envian con tns.enviarTallaColor=S\r\n"
+                    +"tns.enviarTallaColor=N\r\n"
                     +"tns.talla=00\r\n"
                     +"tns.color=00\r\n"
                     +"tns.banco=00\r\n"
@@ -197,6 +200,7 @@ public class consularVentasEDSCaes {
         talla=config.getProperty("tns.talla","00").trim();
         color=config.getProperty("tns.color","00").trim();
         bancoTNS=config.getProperty("tns.banco","00").trim();
+        enviarTallaColor=config.getProperty("tns.enviarTallaColor","N").trim().equalsIgnoreCase("S");
         mostrarGenerarJson=config.getProperty("opciones.generarJson","N").trim().equalsIgnoreCase("S");
         prefijo=config.getProperty("tns.prefijo","FE").trim();
         prefijoRemision=config.getProperty("tns.prefijoRemision","PO").trim();
@@ -1141,8 +1145,11 @@ public class consularVentasEDSCaes {
         venta.addProperty("codigoCentroCosto", centroCosto);
         itempedido.addProperty("codMat",matidString);
         itempedido.addProperty("codBodega", bodega);
-        itempedido.addProperty("codTalla", talla);
-        itempedido.addProperty("codColor", color);
+        // talla y color no son obligatorios en ventas ni remisiones: solo se envian con tns.enviarTallaColor=S
+        if(enviarTallaColor){
+            itempedido.addProperty("codTalla", talla);
+            itempedido.addProperty("codColor", color);
+        }
         itempedido.addProperty("cantidad", Cantidad);
         itempedido.addProperty("tipoUnidad", "D");
         itempedido.addProperty("descuento", 0);
