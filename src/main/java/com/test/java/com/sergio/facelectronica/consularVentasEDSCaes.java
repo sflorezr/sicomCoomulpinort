@@ -32,7 +32,9 @@ import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
+import javax.swing.JScrollPane;
 import javax.swing.JSeparator;
+import javax.swing.JTextArea;
 import javax.swing.JSpinner;
 import javax.swing.JTextField;
 import javax.swing.SpinnerDateModel;
@@ -101,6 +103,11 @@ public class consularVentasEDSCaes {
     private static JButton botonProcesar;
     private static JTextField campoRecibo;
     private static JButton botonRecibo;
+    // OPCION TEMPORAL: arma el JSON de la venta sin enviarlo a TNS (boton "Generar JSON (sin enviar)")
+    private static JButton botonJson;
+    private static volatile boolean soloArmarJson=false;
+    private static String jsonArmado=null;
+    private static String urlArmada=null;
     private static JProgressBar barra;
     private static JLabel estado;
 
@@ -245,12 +252,15 @@ public class consularVentasEDSCaes {
         botonRecibo=new JButton("Importar recibo");
         botonRecibo.addActionListener(e -> ImportarRecibo());
         c.gridx=0; c.gridy=5; c.gridwidth=2; panel.add(botonRecibo, c);
+        botonJson=new JButton("Generar JSON (sin enviar)");
+        botonJson.addActionListener(e -> GenerarJsonRecibo());
+        c.gridy=6; panel.add(botonJson, c);
         barra=new JProgressBar();
         barra.setStringPainted(true);
         barra.setString("");
-        c.gridy=6; panel.add(barra, c);
+        c.gridy=7; panel.add(barra, c);
         estado=new JLabel("Seleccione el rango de fechas o digite un recibo.");
-        c.gridy=7; panel.add(estado, c);
+        c.gridy=8; panel.add(estado, c);
         ventana.getContentPane().add(panel, BorderLayout.CENTER);
         ventana.pack();
         ventana.setSize(Math.max(ventana.getWidth(), 460), ventana.getHeight());
@@ -509,6 +519,100 @@ public class consularVentasEDSCaes {
         }.execute();
     }
     /**
+     * OPCION TEMPORAL: consulta el recibo y arma el JSON que se enviaria a TNS, sin enviarlo
+     * ni crear terceros. El JSON se muestra en pantalla y se guarda en json/recibo_<recibo>_<fecha>.json.
+     */
+    private static void GenerarJsonRecibo(){
+        String recibo=campoRecibo.getText().trim();
+        if(recibo.isEmpty()){
+            JOptionPane.showMessageDialog(ventana, "Digite el numero de recibo.", "Ventas Caes", JOptionPane.WARNING_MESSAGE);
+            campoRecibo.requestFocus();
+            return;
+        }
+        try {
+            AbrirLog();
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(ventana, "No fue posible crear el archivo de log.\n"+e.getMessage(), "Ventas Caes", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        GuardarLog("GENERAR JSON SIN ENVIAR DEL RECIBO "+recibo+" ESTACION "+idEstacion);
+        HabilitarControles(false);
+        barra.setIndeterminate(true);
+        barra.setString("Armando JSON...");
+        new SwingWorker<JSONObject, Void>() {
+            boolean sinSesionTNS=false;
+            @Override
+            protected JSONObject doInBackground() throws Exception {
+                jsonArmado=null;
+                urlArmada=null;
+                Estado("Consultando el recibo "+recibo+"...");
+                JSONObject venta=ConsultarVentaRecibo(recibo);
+                if(venta==null){
+                    return null;
+                }
+                Estado("Iniciando sesion en TNS...");
+                if(!LoginTNS()){
+                    sinSesionTNS=true;
+                    return venta;
+                }
+                Estado("Armando el JSON (no se envia)...");
+                soloArmarJson=true;
+                try {
+                    SubirVenta(venta);
+                } finally {
+                    soloArmarJson=false;
+                }
+                return venta;
+            }
+            @Override
+            protected void done() {
+                barra.setIndeterminate(false);
+                barra.setString("");
+                JSONObject venta;
+                try {
+                    venta=get();
+                } catch (Exception e) {
+                    GuardarLog("ERROR ARMANDO EL JSON DEL RECIBO "+recibo+": "+CausaDe(e));
+                    Finalizar("Ocurrio un error armando el JSON del recibo "+recibo+".", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                if(venta==null){
+                    Finalizar("No se encontro el recibo "+recibo+" en la estacion "+idEstacion+" (ver log).", JOptionPane.WARNING_MESSAGE);
+                    return;
+                }
+                if(sinSesionTNS){
+                    Finalizar("No fue posible iniciar sesion en TNS. Revise los datos tns.* de "+ARCHIVOCONFIG+".", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                if(jsonArmado==null){
+                    Finalizar("No fue posible armar el JSON del recibo "+recibo+" (ver log).", JOptionPane.WARNING_MESSAGE);
+                    return;
+                }
+                File archivo=null;
+                try {
+                    File carpeta=new File(CarpetaAplicacion(), "json");
+                    carpeta.mkdirs();
+                    archivo=new File(carpeta, "recibo_"+recibo.replaceAll("[^A-Za-z0-9_-]", "_")+"_"+LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))+".json");
+                    try (Writer w=new OutputStreamWriter(new FileOutputStream(archivo), StandardCharsets.UTF_8)) {
+                        w.write(jsonArmado);
+                    }
+                    GuardarLog("JSON GUARDADO EN "+archivo.getAbsolutePath());
+                } catch (IOException e) {
+                    GuardarLog("NO FUE POSIBLE GUARDAR EL JSON: "+e.getMessage());
+                    archivo=null;
+                }
+                JTextArea texto=new JTextArea(urlArmada+"\n\n"+jsonArmado);
+                texto.setEditable(false);
+                texto.setFont(new java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, 12));
+                texto.setCaretPosition(0);
+                JScrollPane scroll=new JScrollPane(texto);
+                scroll.setPreferredSize(new java.awt.Dimension(640, 420));
+                JOptionPane.showMessageDialog(ventana, scroll, "JSON del recibo "+recibo+" (NO enviado)", JOptionPane.INFORMATION_MESSAGE);
+                Finalizar("El JSON NO se envio a TNS."+(archivo!=null ? "\nSe guardo en:\n"+archivo.getAbsolutePath() : ""), JOptionPane.INFORMATION_MESSAGE);
+            }
+        }.execute();
+    }
+    /**
      * Texto con los datos principales de la venta para la confirmacion.
      */
     static String ResumenVenta(JSONObject venta){
@@ -670,6 +774,7 @@ public class consularVentasEDSCaes {
     private static void HabilitarControles(boolean habilitar){
         botonProcesar.setEnabled(habilitar);
         botonRecibo.setEnabled(habilitar);
+        botonJson.setEnabled(habilitar);
         campoRecibo.setEnabled(habilitar);
         fechaInicial.setEnabled(habilitar);
         fechaFinal.setEnabled(habilitar);
@@ -1056,6 +1161,14 @@ public class consularVentasEDSCaes {
         RequestBody body = RequestBody.create(MediaType.parse("application/json"), json);
         HttpUrl urlVenta=HttpUrl.parse(URLTNS+rutaDocumento).newBuilder()
             .addQueryParameter("codigosucursal", sucursalTNS).build();
+        if(soloArmarJson){
+            // OPCION TEMPORAL: no se envia, solo se deja el JSON armado
+            jsonArmado=json;
+            urlArmada="POST "+urlVenta;
+            GuardarLog("JSON ARMADO Y NO ENVIADO DEL RECIBO "+recibo+" ("+tipoDocumento+" "+prefijoDocumento+") "+urlArmada);
+            GuardarLog(json);
+            return true;
+        }
         Response response2 = EjecutarTNS(urlVenta, body);
         String respuesta2=response2.body().string();
         JSONObject objRespues=LeerRespuestaTNS(respuesta2);
@@ -1284,6 +1397,10 @@ public class consularVentasEDSCaes {
         return tercero;
     }
     public static Boolean CrearTerceroTNS(JsonObject tercero) throws IOException{
+        if(soloArmarJson){
+            GuardarLog("SIN ENVIAR: SE CREARIA EL TERCERO "+tercero.get("nit").getAsString()+" "+new Gson().toJson(tercero));
+            return true;
+        }
         RequestBody body = RequestBody.create(MediaType.parse("application/json"), new Gson().toJson(tercero));
         Response response = EjecutarTNS(HttpUrl.parse(URLTNS+"/v2/tablas/Tercero/Crear"), body);
         JSONObject rta=LeerRespuestaTNS(response.body().string());
