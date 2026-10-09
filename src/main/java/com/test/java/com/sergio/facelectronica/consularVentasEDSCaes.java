@@ -107,8 +107,8 @@ public class consularVentasEDSCaes {
     // OPCION TEMPORAL: arma el JSON de la venta sin enviarlo a TNS (boton "Generar JSON (sin enviar)")
     private static JButton botonJson;
     private static volatile boolean soloArmarJson=false;
-    // el boton solo se muestra con opciones.generarJson=S en caes.properties
-    private static boolean mostrarGenerarJson=false;
+    // el boton se muestra por defecto; se oculta con opciones.generarJson=N en caes.properties
+    private static boolean mostrarGenerarJson=true;
     private static String jsonArmado=null;
     private static String urlArmada=null;
     private static JProgressBar barra;
@@ -201,7 +201,7 @@ public class consularVentasEDSCaes {
         color=config.getProperty("tns.color","00").trim();
         bancoTNS=config.getProperty("tns.banco","00").trim();
         enviarTallaColor=config.getProperty("tns.enviarTallaColor","N").trim().equalsIgnoreCase("S");
-        mostrarGenerarJson=config.getProperty("opciones.generarJson","N").trim().equalsIgnoreCase("S");
+        mostrarGenerarJson=!config.getProperty("opciones.generarJson","S").trim().equalsIgnoreCase("N");
         prefijo=config.getProperty("tns.prefijo","FE").trim();
         prefijoRemision=config.getProperty("tns.prefijoRemision","PO").trim();
         try {
