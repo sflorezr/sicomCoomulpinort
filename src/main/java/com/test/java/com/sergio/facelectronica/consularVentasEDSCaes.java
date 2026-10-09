@@ -81,8 +81,8 @@ public class consularVentasEDSCaes {
     static String talla="00";
     static String color="00";
     static String bancoTNS="00";
-    // talla y color en ventas y remisiones: NULL (envia null), S (envia tns.talla/tns.color) o N (no los envia)
-    static String enviarTallaColor="NULL";
+    // talla y color en ventas y remisiones: VACIO (envia ""), NULL (envia null), S (envia tns.talla/tns.color) o N (no los envia)
+    static String enviarTallaColor="VACIO";
     private static String centroCosto="00";
     private static String prefijo="FE";
     private static String prefijoRemision="PO";
@@ -152,8 +152,8 @@ public class consularVentasEDSCaes {
                     +"tns.bodega=00\r\n"
                     +"tns.centroCosto=00\r\n"
                     +"# talla y color: se usan en las devoluciones (ReversarVentasPO); en ventas y\r\n"
-                    +"# remisiones: NULL los envia en null, S envia tns.talla/tns.color, N no los envia\r\n"
-                    +"tns.enviarTallaColor=NULL\r\n"
+                    +"# remisiones: VACIO los envia como \"\", NULL en null, S envia tns.talla/tns.color, N no los envia\r\n"
+                    +"tns.enviarTallaColor=VACIO\r\n"
                     +"tns.talla=00\r\n"
                     +"tns.color=00\r\n"
                     +"tns.banco=00\r\n"
@@ -201,7 +201,7 @@ public class consularVentasEDSCaes {
         talla=config.getProperty("tns.talla","00").trim();
         color=config.getProperty("tns.color","00").trim();
         bancoTNS=config.getProperty("tns.banco","00").trim();
-        enviarTallaColor=config.getProperty("tns.enviarTallaColor","NULL").trim().toUpperCase();
+        enviarTallaColor=config.getProperty("tns.enviarTallaColor","VACIO").trim().toUpperCase();
         mostrarGenerarJson=!config.getProperty("opciones.generarJson","S").trim().equalsIgnoreCase("N");
         prefijo=config.getProperty("tns.prefijo","FE").trim();
         prefijoRemision=config.getProperty("tns.prefijoRemision","PO").trim();
@@ -1146,13 +1146,17 @@ public class consularVentasEDSCaes {
         venta.addProperty("codigoCentroCosto", centroCosto);
         itempedido.addProperty("codMat",matidString);
         itempedido.addProperty("codBodega", bodega);
-        // talla y color segun tns.enviarTallaColor: NULL -> null, S -> tns.talla/tns.color, N -> no se envian
+        // talla y color segun tns.enviarTallaColor: VACIO -> "" (indicado por TNS), NULL -> null,
+        // S -> tns.talla/tns.color, N -> no se envian
         if(enviarTallaColor.equals("S")){
             itempedido.addProperty("codTalla", talla);
             itempedido.addProperty("codColor", color);
-        }else if(!enviarTallaColor.equals("N")){
+        }else if(enviarTallaColor.equals("NULL")){
             itempedido.add("codTalla", com.google.gson.JsonNull.INSTANCE);
             itempedido.add("codColor", com.google.gson.JsonNull.INSTANCE);
+        }else if(!enviarTallaColor.equals("N")){
+            itempedido.addProperty("codTalla", "");
+            itempedido.addProperty("codColor", "");
         }
         itempedido.addProperty("cantidad", Cantidad);
         itempedido.addProperty("tipoUnidad", "D");
