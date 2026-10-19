@@ -247,7 +247,9 @@ public class consularVentasTerpelPinar {
                     }
 
                     
-                    SimpleDateFormat sdfSalida  = new SimpleDateFormat("dd/MM/yyyy");
+                    // Firebird recibe las fechas como MM/dd/yyyy; sin lenient un formato equivocado falla en vez de correr la fecha
+                    SimpleDateFormat sdfSalida  = new SimpleDateFormat("MM/dd/yyyy");
+                    sdfSalida.setLenient(false);
                     Date fecha = null;
                     fechaVentaString=fechaVentaString.substring(5, 7)+'/'+fechaVentaString.substring(8, 10)+'/'+fechaVentaString.substring(0, 4);
 
