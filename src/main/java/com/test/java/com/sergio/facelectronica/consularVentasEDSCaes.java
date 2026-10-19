@@ -100,9 +100,12 @@ public class consularVentasEDSCaes {
     private static java.util.Set<String> recibosSubidos=new java.util.HashSet<>();
 
     private static JFrame ventana;
-    private static JSpinner fechaInicial;
-    private static JSpinner fechaFinal;
+    private static SelectorFecha fechaInicial;
+    private static SelectorFecha fechaFinal;
     private static JButton botonProcesar;
+    private static JButton botonHoy;
+    private static JButton botonAyer;
+    private static JButton botonSemana;
     private static JTextField campoRecibo;
     private static JButton botonRecibo;
     // OPCION TEMPORAL: arma el JSON de la venta sin enviarlo a TNS (boton "Generar JSON (sin enviar)")
@@ -242,34 +245,46 @@ public class consularVentasEDSCaes {
         GridBagConstraints c=new GridBagConstraints();
         c.insets=new Insets(5, 5, 5, 5);
         c.fill=GridBagConstraints.HORIZONTAL;
-        fechaInicial=CrearCampoFecha();
-        fechaFinal=CrearCampoFecha();
+        fechaInicial=new SelectorFecha(LocalDate.now());
+        fechaFinal=new SelectorFecha(LocalDate.now());
         c.gridx=0; c.gridy=0; panel.add(new JLabel("Fecha inicial:"), c);
         c.gridx=1; panel.add(fechaInicial, c);
         c.gridx=0; c.gridy=1; panel.add(new JLabel("Fecha final:"), c);
         c.gridx=1; panel.add(fechaFinal, c);
+        // accesos rapidos para el rango de fechas
+        JPanel rapidos=new JPanel(new java.awt.GridLayout(1, 3, 5, 0));
+        botonHoy=new JButton("Hoy");
+        botonHoy.addActionListener(e -> RangoRapido(LocalDate.now(), LocalDate.now()));
+        botonAyer=new JButton("Ayer");
+        botonAyer.addActionListener(e -> RangoRapido(LocalDate.now().minusDays(1), LocalDate.now().minusDays(1)));
+        botonSemana=new JButton("Ultimos 7 dias");
+        botonSemana.addActionListener(e -> RangoRapido(LocalDate.now().minusDays(6), LocalDate.now()));
+        rapidos.add(botonHoy);
+        rapidos.add(botonAyer);
+        rapidos.add(botonSemana);
+        c.gridx=1; c.gridy=2; panel.add(rapidos, c);
         botonProcesar=new JButton("Procesar");
         botonProcesar.addActionListener(e -> Procesar());
-        c.gridx=0; c.gridy=2; c.gridwidth=2; panel.add(botonProcesar, c);
-        c.gridy=3; panel.add(new JSeparator(), c);
+        c.gridx=0; c.gridy=3; c.gridwidth=2; panel.add(botonProcesar, c);
+        c.gridy=4; panel.add(new JSeparator(), c);
         campoRecibo=new JTextField();
         campoRecibo.addActionListener(e -> ImportarRecibo());
         c.gridwidth=1;
-        c.gridx=0; c.gridy=4; panel.add(new JLabel("Recibo:"), c);
+        c.gridx=0; c.gridy=5; panel.add(new JLabel("Recibo:"), c);
         c.gridx=1; panel.add(campoRecibo, c);
         botonRecibo=new JButton("Importar recibo");
         botonRecibo.addActionListener(e -> ImportarRecibo());
-        c.gridx=0; c.gridy=5; c.gridwidth=2; panel.add(botonRecibo, c);
+        c.gridx=0; c.gridy=6; c.gridwidth=2; panel.add(botonRecibo, c);
         botonJson=new JButton("Generar JSON (sin enviar)");
         botonJson.addActionListener(e -> GenerarJsonRecibo());
         botonJson.setVisible(mostrarGenerarJson);
-        c.gridy=6; panel.add(botonJson, c);
+        c.gridy=7; panel.add(botonJson, c);
         barra=new JProgressBar();
         barra.setStringPainted(true);
         barra.setString("");
-        c.gridy=7; panel.add(barra, c);
+        c.gridy=8; panel.add(barra, c);
         estado=new JLabel("Seleccione el rango de fechas o digite un recibo.");
-        c.gridy=8; panel.add(estado, c);
+        c.gridy=9; panel.add(estado, c);
         ventana.getContentPane().add(panel, BorderLayout.CENTER);
         ventana.pack();
         ventana.setSize(Math.max(ventana.getWidth(), 460), ventana.getHeight());
@@ -277,13 +292,9 @@ public class consularVentasEDSCaes {
         ventana.setLocationRelativeTo(null);
         ventana.setVisible(true);
     }
-    private static JSpinner CrearCampoFecha(){
-        JSpinner campo=new JSpinner(new SpinnerDateModel());
-        campo.setEditor(new JSpinner.DateEditor(campo, "yyyy-MM-dd"));
-        return campo;
-    }
-    private static LocalDate FechaDe(JSpinner campo){
-        return ((Date) campo.getValue()).toInstant().atZone(ZoneId.systemDefault()).toLocalDate();
+    private static void RangoRapido(LocalDate inicio,LocalDate fin){
+        fechaInicial.setFecha(inicio);
+        fechaFinal.setFecha(fin);
     }
     private static void Estado(String texto){
         SwingUtilities.invokeLater(() -> estado.setText(texto));
@@ -293,8 +304,13 @@ public class consularVentasEDSCaes {
      * Paso 1: consulta las ventas del rango en segundo plano y pide confirmacion.
      */
     private static void Procesar(){
-        LocalDate inicio=FechaDe(fechaInicial);
-        LocalDate fin=FechaDe(fechaFinal);
+        LocalDate inicio=fechaInicial.getFecha();
+        LocalDate fin=fechaFinal.getFecha();
+        if(inicio==null || fin==null){
+            JOptionPane.showMessageDialog(ventana, "Digite fechas validas con el formato dd/mm/aaaa\n(por ejemplo "+LocalDate.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))+") o seleccionelas en el calendario.", "Ventas Caes", JOptionPane.WARNING_MESSAGE);
+            (inicio==null ? fechaInicial : fechaFinal).requestFocus();
+            return;
+        }
         if(inicio.isAfter(fin)){
             JOptionPane.showMessageDialog(ventana, "La fecha inicial no puede ser mayor que la fecha final.", "Ventas Caes", JOptionPane.WARNING_MESSAGE);
             return;
@@ -787,6 +803,9 @@ public class consularVentasEDSCaes {
         campoRecibo.setEnabled(habilitar);
         fechaInicial.setEnabled(habilitar);
         fechaFinal.setEnabled(habilitar);
+        botonHoy.setEnabled(habilitar);
+        botonAyer.setEnabled(habilitar);
+        botonSemana.setEnabled(habilitar);
     }
     /**
      * Cierra el log, muestra el resumen y abre el archivo de log.
