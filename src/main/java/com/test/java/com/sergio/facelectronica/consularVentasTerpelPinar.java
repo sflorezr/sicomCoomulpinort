@@ -2,11 +2,17 @@ package com.test.java.com.sergio.facelectronica;
 import java.io.*;
 import java.security.cert.CertificateException;
 import java.sql.SQLException;
+import java.sql.Statement;
+import java.text.Normalizer;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.sql.ResultSet;
 import javax.net.ssl.HostnameVerifier;
@@ -129,11 +135,18 @@ public class consularVentasTerpelPinar {
             Tns.actualizar(sqlString);
             sqlString="delete from logterpel";
             Tns.actualizar(sqlString);
-            sqlString="insert into varios (contenido,variab) values('0','CANTIDADTERPELSUBIDA')";  
-            Tns.actualizar(sqlString);    
-            for (int i = 0; i < obj.getJSONArray("data").length(); i++) {
-            //for (int i = 0; i < 5; i++) { 
-                teridString=""; 
+            sqlString="insert into varios (contenido,variab) values('0','CANTIDADTERPELSUBIDA')";
+            Tns.actualizar(sqlString);
+            int total=obj.getJSONArray("data").length();
+            int insertadas=0;
+            int existentes=0;
+            int conError=0;
+            GuardarLog("INICIO CARGUE "+fechaString+" A "+fechaFinString+": "+total+" VENTAS RECIBIDAS DE TERPEL");
+            for (int i = 0; i < total; i++) {
+            //for (int i = 0; i < 5; i++) {
+              String facturaLog="";
+              try {
+                teridString="";
                 fechaVentaString="";
                 vendedorIdString="";
                 kardexidString="";
@@ -142,42 +155,45 @@ public class consularVentasTerpelPinar {
                 formapago="";
                 referencia="";
                 bodega="";
-                sale=obj.getJSONArray("data").getJSONObject(i);  
-                teridString=ConsultarTerid(sale,"cliente");  
-                vendedorIdString=ConsultarTerid(sale, "vendedor");
-                observaciones=sale.getString("consecutivo_factura")+" "+sale.getString("placa");
+                sale=obj.getJSONArray("data").getJSONObject(i);
+                facturaLog=sale.get("consecutivo_factura").toString();
+                observaciones=Sql(sale.getString("consecutivo_factura")+" "+sale.getString("placa"));
                 System.out.println(sale.getString("consecutivo_factura"));
-                if (BuscarVenta(sale)) {
-                    GuardarLog("LA FACTURA "+sale.getString("consecutivo_factura")+" YA EXISTE");
-                } else {                    
 
-                    if(sale.getString("consecutivo_factura").split("-").length > 1){ 
-                        prefijo=sale.getString("consecutivo_factura").split("-")[0].trim(); 
-                        numero=sale.getString("consecutivo_factura").split("-")[1].trim();                       
-                        if (numero.contains("F")||numero.contains("F")){
-                            prefijo=sale.getString("consecutivo_factura").split("-")[1].trim();
-                            numero=sale.getString("consecutivo_factura").split("-")[0].trim();
-                        }
-                        prefijo=BuscarPrefijo(prefijo); 
-                    } else{
-                        numero=sale.get("consecutivo_factura").toString();
-                        prefijo="00";
+                if(sale.getString("consecutivo_factura").split("-").length > 1){
+                    prefijo=sale.getString("consecutivo_factura").split("-")[0].trim();
+                    numero=sale.getString("consecutivo_factura").split("-")[1].trim();
+                    if (numero.contains("F")||numero.contains("F")){
+                        prefijo=sale.getString("consecutivo_factura").split("-")[1].trim();
+                        numero=sale.getString("consecutivo_factura").split("-")[0].trim();
                     }
-                    if(sale.getString("tipo_factura").equals("NC")){
-                        codcomp="DV";
-                        referencia=sale.getString("referencia").trim();
-                        referencia=referencia.replaceAll(" ", "");
-                        referencia=referencia.replaceAll("-", "");
-                        referencia=referencia.substring(2);                        
+                    prefijo=BuscarPrefijo(prefijo);
+                } else{
+                    numero=sale.get("consecutivo_factura").toString();
+                    prefijo="00";
+                }
+                numero=UltimosOchoDigitos(numero);
+                if(sale.getString("tipo_factura").equals("NC")){
+                    codcomp="DV";
+                    referencia=sale.getString("referencia").trim();
+                    referencia=referencia.replaceAll(" ", "");
+                    referencia=referencia.replaceAll("-", "");
+                    referencia=referencia.substring(2);
+                }else{
+                    if(sale.getString("tipo_factura").equals("FE")){
+                        codcomp="FV";
                     }else{
-                        if(sale.getString("tipo_factura").equals("FE")){
-                            codcomp="FV";
-                        }else{
-                            codcomp="RS";
-                        }
-                        
+                        codcomp="RS";
                     }
-                    
+
+                }
+
+                if (!ConsultarVenta(codcomp,numero,prefijo).isEmpty()) {
+                    existentes++;
+                    GuardarLog("LA FACTURA "+facturaLog+" YA EXISTE ("+codcomp+" "+prefijo+" "+numero+")");
+                } else {
+                    teridString=ConsultarTerid(sale,"cliente");
+                    vendedorIdString=ConsultarTerid(sale, "vendedor");
 
                     fechaVentaString=sale.getString("fecha");
                     hora=sale.getString("hora");
@@ -227,7 +243,7 @@ public class consularVentasTerpelPinar {
                                 teridString = "1";
                             }
                         }
-                        observaciones = observaciones + " "+sale.getString("medio_autorizacion") + " " +sale.getString("nombre_cliente");
+                        observaciones = observaciones + " "+Sql(sale.getString("medio_autorizacion") + " " +sale.getString("nombre_cliente"));
                     }
 
                     
@@ -293,8 +309,16 @@ public class consularVentasTerpelPinar {
                               ",'"+hora+"'"+
                               ",'"+fechaString.substring(5,7)+"/"+fechaString.substring(8,10)+"/"+fechaString.substring(0,4)+"'"+
                               ")";
-                        Tns.actualizar(sqlString);
+                        if(!Ejecutar(sqlString,"AL INSERTAR EL KARDEX DE LA FACTURA "+facturaLog)){
+                            conError++;
+                            continue;
+                        }
                         kardexidString=ConsultarVenta(codcomp,numero,prefijo);
+                        if(kardexidString.isEmpty()){
+                            conError++;
+                            GuardarLog("LA FACTURA "+facturaLog+" NO QUEDO EN KARDEX ("+codcomp+" "+prefijo+" "+numero+") AUNQUE EL INSERT NO REPORTO ERROR");
+                            continue;
+                        }
                        // InsertarFormapago(sale,kardexidString,teridString);
                         if(BuscarMaterial(sale,sucid)){
                             matidString=ConsultarMaterial(sale,sucid);
@@ -324,17 +348,50 @@ public class consularVentasTerpelPinar {
                                         ",'"+precioBaseFloat+"'"+
                                         ",'"+sale.get("valor_venta_total").toString().replaceAll("-","")+"'"+
                                         ")";
-                                        Tns.actualizar(sqlString);
+                            if(!Ejecutar(sqlString,"AL INSERTAR EL DETALLE DE LA FACTURA "+facturaLog)){
+                                // se borra el encabezado para que la factura se vuelva a intentar en el siguiente cargue
+                                Ejecutar("delete from kardex where kardexid="+kardexidString,"AL BORRAR EL KARDEX SIN DETALLE DE LA FACTURA "+facturaLog);
+                                conError++;
+                                continue;
+                            }
                         }else{
                             GuardarLog("EL ARTICULO "+sale.getString("producto")+" NO EXISTE, EN LA FACTURA "+sale.getString("consecutivo_factura"));
-                        }                         
-                    
-                                       
-                   
-                   //System.out.println(i +" de "+obj.getJSONArray("data").length()+1); 
+                        }
+                    insertadas++;
+
+
+                   //System.out.println(i +" de "+obj.getJSONArray("data").length()+1);
                 }
+              } catch (Exception e) {
+                conError++;
+                GuardarLog("ERROR PROCESANDO LA FACTURA "+facturaLog+": "+e);
+                e.printStackTrace();
+              } finally {
                 Tns.actualizar("update varios set contenido='"+Integer.toString(i+1)+"' where variab='CANTIDADTERPELSUBIDA'");
+              }
             }
+            GuardarLog("FIN CARGUE: "+total+" RECIBIDAS, "+insertadas+" INSERTADAS, "+existentes+" YA EXISTIAN, "+conError+" CON ERROR");
+        }
+    }
+    // kardex.numero solo admite 8 caracteres y Terpel POS a veces envia consecutivos mas largos
+    public static String UltimosOchoDigitos(String numero){
+        numero=numero.trim();
+        return numero.length()>8 ? numero.substring(numero.length()-8) : numero;
+    }
+    // escapa comillas simples para que un nombre como D'ALEMAN no rompa el SQL
+    public static String Sql(String valor){
+        return valor==null ? "" : valor.replace("'", "''");
+    }
+    // a diferencia de Tns.actualizar, informa en LOGTERPEL cuando el SQL falla
+    public static boolean Ejecutar(String sql,String contexto){
+        System.out.println(sql);
+        try (Statement st=Tns.getStatement()) {
+            st.executeUpdate(sql);
+            return true;
+        } catch (SQLException | ClassNotFoundException e) {
+            GuardarLog("ERROR "+contexto+": "+e.getMessage());
+            GuardarLogArchivo("SQL FALLIDO: "+sql);
+            return false;
         }
     }
     public static void InsertarFormapago(JSONObject sale,String kardexidString,String terid) throws ClassNotFoundException, SQLException{
@@ -413,33 +470,6 @@ public class consularVentasTerpelPinar {
         }
         return matidString;
     }
-    public static Boolean BuscarVenta(JSONObject ventaJsonObject) throws ClassNotFoundException, SQLException{
-        Boolean existe=false;
-        String prefijo="";
-        String numero="";  
-        if(sale.getString("consecutivo_factura").split("-").length > 1){ 
-            prefijo=sale.getString("consecutivo_factura").split("-")[0].trim(); 
-            numero=sale.getString("consecutivo_factura").split("-")[1].trim();                       
-            if (numero.contains("F")||numero.contains("F")){
-                prefijo=sale.getString("consecutivo_factura").split("-")[1].trim();
-                numero=sale.getString("consecutivo_factura").split("-")[0].trim();
-            }
-            prefijo=BuscarPrefijo(prefijo); 
-        } else{
-            numero=sale.get("consecutivo_factura").toString();
-            prefijo="00";
-        }
-                            
-               
-
-        sqlString="select kardexid from kardex where codcomp='FV' and codprefijo='"+prefijo+"' and numero='"+numero+"'"; 
-
-        ResultSet rs = Tns.consultar(sqlString);
-        while (rs.next()){
-            existe=true;
-        }
-        return existe;
-    }
     public static String ObtenerCampo(JSONObject jsonObject,String campo){
         String respuestaString="";
         if (!jsonObject.get(campo).equals(null)){
@@ -453,35 +483,46 @@ public class consularVentasTerpelPinar {
         String nombre="";
         if(tipo.equals("cliente")){
             if (venta.getString("numero_documento_fe").equals("0")){
-                String nombreCliente = venta.getString("nombre_cliente").trim().replaceAll("\\s+", "%");
+                String nombreCliente = Sql(venta.getString("nombre_cliente").trim().replaceAll("\\s+", "%"));
                 sqlString = "SELECT terid FROM terceros WHERE TRIM(nombre) LIKE '%" + nombreCliente + "%'";
             }else{
-                sqlString="select terid from terceros where (nit like '%"+venta.getString("numero_documento_fe")+"%' or nittri like '%"+venta.getString("numero_documento_fe")+"' or nombre ='"+venta.getString("nombre_cliente")+"%' )";
+                sqlString="select terid from terceros where (nit like '%"+venta.getString("numero_documento_fe")+"%' or nittri like '%"+venta.getString("numero_documento_fe")+"' or nombre ='"+Sql(venta.getString("nombre_cliente"))+"%' )";
             }
         }else{
-            nombre=ObtenerCampo(venta, "promotor");
-            switch (nombre.split(" ").length) {
-                case 4: nombre=nombre.split(" ")[2]+" "+nombre.split(" ")[3]+" "+nombre.split(" ")[0]+" "+nombre.split(" ")[1]; break;
-                case 3: nombre=nombre.split(" ")[1]+" "+nombre.split(" ")[2]+" "+nombre.split(" ")[0];
-                case 2: nombre=nombre.split(" ")[1]+" "+nombre.split(" ")[0];            
-                case 1: nombre=nombre.split(" ")[0];     
+            nombre=ObtenerCampo(venta, "promotor").trim();
+            String[] partes=nombre.split("\\s+");
+            // Terpel envia NOMBRES APELLIDOS y en TNS esta APELLIDOS NOMBRES
+            switch (partes.length) {
+                case 4: nombre=partes[2]+" "+partes[3]+" "+partes[0]+" "+partes[1]; break;
+                case 3: nombre=partes[1]+" "+partes[2]+" "+partes[0]; break;
+                case 2: nombre=partes[1]+" "+partes[0]; break;
                 default: break;
             }
-            sqlString="select terid from terceros where nombre ='"+nombre+"' ";
+            sqlString="select terid from terceros where nombre ='"+Sql(nombre)+"' ";
         }
-        
+
         ResultSet rs =Tns.consultar(sqlString);
         while(rs.next()){
             teridString=rs.getString("terid");
+        }
+        // el nombre en TNS puede estar en otro orden o incompleto
+        if(teridString.isEmpty()){
+            if(tipo.equals("cliente")){
+                if (venta.getString("numero_documento_fe").equals("0")){
+                    teridString=BuscarTerceroPorNombre(venta.getString("nombre_cliente"));
+                }
+            }else{
+                teridString=BuscarTerceroPorNombre(ObtenerCampo(venta, "promotor"));
+            }
         }
         if(teridString.isEmpty()){
             if(tipo.equals("cliente")){
                 if (!venta.getString("numero_documento_fe").equals("0")){
                     sqlString="insert into terceros(nit,nittri,nombre,direcc1,telef1,telef2,tipodociden,zona1,cliente,fechcreac,clasificaid,ciudaneid)"+
                     "values('"+venta.getString("numero_documento_fe")+"','"+venta.getString("numero_documento_fe")+"'"+
-                    ",'"+venta.getString("nombre_cliente")+"','SIN DIRECCION'"+
+                    ",'"+Sql(venta.getString("nombre_cliente"))+"','SIN DIRECCION'"+
                     ",'SIN TELEFONO','','C','1','S','now',1,1)";
-                    Tns.actualizar(sqlString);   
+                    Ejecutar(sqlString,"AL CREAR EL TERCERO "+venta.getString("numero_documento_fe")+" DE LA FACTURA "+venta.get("consecutivo_factura"));
                     sqlString="select terid from terceros where (nit ='"+venta.getString("numero_documento_fe")+"' or nittri ='"+venta.getString("numero_documento_fe")+"' )"; 
                     rs =Tns.consultar(sqlString);
                     while(rs.next()){
@@ -513,8 +554,134 @@ public class consularVentasTerpelPinar {
         }
         return terid;
     }
-    public static void GuardarLog(String observacionString) throws SQLException{
-        Tns.actualizar("INSERT INTO LOGTERPEL(FECHA,OBSERVACIONES)values('now','"+observacionString+"')");
+    private static final Set<String> PALABRAS_IGNORADAS = new HashSet<>(Arrays.asList(
+        "S","A","SA","SAS","LTDA","LTD","EU","E","U","CIA","Y","DE","DEL","LA","LAS","LOS","EL","EN","CI","SC","ZOMAC"));
+
+    // "Transportes Gomez  S.A.S." -> [TRANSPORTES, GOMEZ] (sin tildes ni signos)
+    private static List<String> PalabrasNombre(String nombre){
+        String limpio=Normalizer.normalize(nombre==null?"":nombre, Normalizer.Form.NFD)
+            .replaceAll("\\p{M}", "")
+            .toUpperCase()
+            .replaceAll("[^A-Z0-9 ]", " ")
+            .trim();
+        List<String> palabras=new ArrayList<>();
+        for (String palabra : limpio.split("\\s+")) {
+            if(!palabra.isEmpty() && !PALABRAS_IGNORADAS.contains(palabra) && !palabras.contains(palabra)){
+                palabras.add(palabra);
+            }
+        }
+        return palabras;
+    }
+
+    private static int Levenshtein(String a,String b){
+        int[] previo=new int[b.length()+1];
+        int[] actual=new int[b.length()+1];
+        for (int j = 0; j <= b.length(); j++) { previo[j]=j; }
+        for (int i = 1; i <= a.length(); i++) {
+            actual[0]=i;
+            for (int j = 1; j <= b.length(); j++) {
+                int costo=a.charAt(i-1)==b.charAt(j-1)?0:1;
+                actual[j]=Math.min(Math.min(actual[j-1]+1, previo[j]+1), previo[j-1]+costo);
+            }
+            int[] tmp=previo; previo=actual; actual=tmp;
+        }
+        return previo[b.length()];
+    }
+
+    // dos palabras se consideran iguales si son identicas o, cuando son largas, difieren en una letra (RODRIGUES/RODRIGUEZ)
+    private static boolean PalabrasParecidas(String a,String b){
+        if(a.equals(b)){ return true; }
+        return a.length()>=5 && b.length()>=5 && Levenshtein(a,b)<=1;
+    }
+
+    private static int PalabrasEnComun(List<String> a,List<String> b){
+        int comunes=0;
+        for (String palabra : a) {
+            for (String otra : b) {
+                if(PalabrasParecidas(palabra, otra)){ comunes++; break; }
+            }
+        }
+        return comunes;
+    }
+
+    /**
+     * Busca el tercero por nombre comparando por palabras (sin tildes, mayusculas,
+     * sin S.A.S/LTDA, en cualquier orden). Acepta el candidato si:
+     *  - contiene todas las palabras del nombre de Terpel, o
+     *  - todas sus palabras estan en el nombre de Terpel y tiene al menos 2
+     *    (nombre incompleto en TNS: "PEREZ GOMEZ JUAN" vs "JUAN CARLOS PEREZ GOMEZ"), o
+     *  - coinciden al menos el 80% de las palabras.
+     * Si hay empate entre varios terceros no elige ninguno para no cargar la venta a otro.
+     */
+    public static String BuscarTerceroPorNombre(String nombreBuscado) throws ClassNotFoundException, SQLException{
+        List<String> palabrasBuscadas=PalabrasNombre(nombreBuscado);
+        if(palabrasBuscadas.isEmpty()){ return ""; }
+
+        StringBuilder filtro=new StringBuilder();
+        for (String palabra : palabrasBuscadas) {
+            if(palabra.length()<3){ continue; }
+            if(filtro.length()>0){ filtro.append(" or "); }
+            filtro.append("upper(nombre) like '%").append(palabra.substring(0, Math.min(palabra.length(), 4))).append("%'");
+        }
+        if(filtro.length()==0){ return ""; }
+
+        String mejorTerid="";
+        String mejorNombre="";
+        double mejorPuntaje=0;
+        boolean empate=false;
+        ResultSet rs=Tns.consultar("select first 500 terid,nombre from terceros where "+filtro);
+        while(rs.next()){
+            List<String> palabrasTercero=PalabrasNombre(rs.getString("nombre"));
+            if(palabrasTercero.isEmpty()){ continue; }
+            int comunes=PalabrasEnComun(palabrasBuscadas, palabrasTercero);
+            double dice=2.0*comunes/(palabrasBuscadas.size()+palabrasTercero.size());
+            boolean contieneTodas=comunes==palabrasBuscadas.size();
+            boolean terceroIncompleto=palabrasTercero.size()>=2
+                && PalabrasEnComun(palabrasTercero, palabrasBuscadas)==palabrasTercero.size();
+            if(!contieneTodas && !terceroIncompleto && dice<0.8){ continue; }
+            if(dice>mejorPuntaje+0.0001){
+                mejorPuntaje=dice;
+                mejorTerid=rs.getString("terid");
+                mejorNombre=rs.getString("nombre");
+                empate=false;
+            }else if(Math.abs(dice-mejorPuntaje)<=0.0001 && !rs.getString("terid").equals(mejorTerid)){
+                empate=true;
+            }
+        }
+        if(mejorTerid.isEmpty()){
+            GuardarLog("NO SE ENCONTRO EL TERCERO POR NOMBRE: "+nombreBuscado);
+            return "";
+        }
+        if(empate){
+            GuardarLog("VARIOS TERCEROS PARECIDOS A "+nombreBuscado+", NO SE ASIGNO NINGUNO");
+            return "";
+        }
+        if(!PalabrasNombre(mejorNombre).equals(palabrasBuscadas)){
+            GuardarLog("TERCERO "+nombreBuscado+" ASIGNADO POR PARECIDO A "+mejorNombre);
+        }
+        return mejorTerid;
+    }
+
+    // LOGTERPEL no debe perder mensajes: se escapan comillas, se recorta el texto y,
+    // si aun asi falla el insert, el mensaje queda en c:\tempo\terpel_log.txt
+    public static void GuardarLog(String observacionString){
+        String texto=observacionString==null?"":observacionString;
+        GuardarLogArchivo(texto);
+        if(texto.length()>250){ texto=texto.substring(0, 250); }
+        try (Statement st=Tns.getStatement()) {
+            st.executeUpdate("INSERT INTO LOGTERPEL(FECHA,OBSERVACIONES)values('now','"+Sql(texto)+"')");
+        } catch (SQLException | ClassNotFoundException e) {
+            GuardarLogArchivo("NO SE PUDO GUARDAR EN LOGTERPEL: "+e.getMessage());
+        }
+    }
+    public static void GuardarLogArchivo(String texto){
+        System.out.println(texto);
+        String fechaHora=new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
+        try (PrintWriter pw=new PrintWriter(new FileWriter("c:\\tempo\\terpel_log.txt", true))) {
+            pw.println(fechaHora+" "+texto);
+        } catch (IOException e) {
+            System.out.println("NO SE PUDO ESCRIBIR EL LOG EN ARCHIVO: "+e.getMessage());
+        }
     }
     public static void ConsultarToken()throws IOException, ClassNotFoundException, JSONException, SQLException{
         object.addProperty("user", usuario);
