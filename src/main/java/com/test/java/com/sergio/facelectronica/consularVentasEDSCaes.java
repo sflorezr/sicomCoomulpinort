@@ -1104,6 +1104,42 @@ public class consularVentasEDSCaes {
         }
         return banco;
     }
+    /**
+     * Total pagado: suma de los valores de Pagos; si no hay pagos se usa el Valor de la venta.
+     */
+    static double TotalPagado(JSONObject sale){
+        double total=0;
+        JSONArray pagos=sale.optJSONArray("Pagos");
+        if(pagos!=null){
+            for (int j = 0; j < pagos.length(); j++) {
+                JSONObject pago=pagos.optJSONObject(j);
+                if(pago!=null){
+                    total+=pago.optDouble("Valor", 0);
+                }
+            }
+        }
+        return total>0 ? total : sale.optDouble("Valor", 0);
+    }
+    /**
+     * Cantidad reportada por la estacion; si no viene, total / precio redondeado a 3 decimales.
+     */
+    static double CantidadVenta(JSONObject sale,double total){
+        double cantidad=sale.optDouble("Cantidad", 0);
+        if(Double.isNaN(cantidad) || cantidad<=0){
+            double precio=sale.optDouble("Precio", 0);
+            cantidad=precio>0 ? new java.math.BigDecimal(total/precio).setScale(3, java.math.RoundingMode.HALF_UP).doubleValue() : 1;
+        }
+        return cantidad;
+    }
+    /**
+     * Valor unitario = total / cantidad, con 6 decimales.
+     */
+    static double ValorUnitario(double total,double cantidad){
+        if(cantidad==0){
+            return total;
+        }
+        return new java.math.BigDecimal(total).divide(new java.math.BigDecimal(String.valueOf(cantidad)), 6, java.math.RoundingMode.HALF_UP).doubleValue();
+    }
     public static Boolean SubirVenta(JSONObject sale) throws IOException{
         String teridString=ConsultarTerid(sale,"cliente");  
         String vendedorIdString=ConsultarTerid(sale, "vendedor");
@@ -1144,8 +1180,11 @@ public class consularVentasEDSCaes {
             GuardarLog("EL ARTICULO "+sale.getJSONObject("Producto").getString("Nombre")+" NO EXISTE, EN EL RECIBO "+recibo);
             return false;
         }
-        Float Cantidad=sale.getFloat("Valor")/sale.getFloat("Precio");
-        Float precioBaseFloat=sale.getFloat("Precio");
+        // el valor unitario se calcula como total pagado / cantidad para que cantidad x unitario
+        // de exactamente el total en TNS (con Valor/Precio la cantidad se redondeaba y se descuadraba)
+        double totalVenta=TotalPagado(sale);
+        double Cantidad=CantidadVenta(sale, totalVenta);
+        double precioBaseFloat=ValorUnitario(totalVenta, Cantidad);
         JsonObject venta = new JsonObject();
         JsonArray itemsPedido = new JsonArray();
         JsonObject itempedido = new JsonObject();
@@ -1191,7 +1230,7 @@ public class consularVentasEDSCaes {
         itemformapago.addProperty("plazoDias", plazoDias);
         itemformapago.addProperty("fechaVencimiento", fechaVentaString);
         itemformapago.addProperty("centroCosto", centroCosto);
-        itemformapago.addProperty("valor", sale.get("Valor").toString());
+        itemformapago.addProperty("valor", String.valueOf(totalVenta));
         itemsFormaPago.add(itemformapago);
         venta.add("detalleFormaPago", itemsFormaPago);
         // serializeNulls para que los campos en null (talla/color) si viajen en el JSON
