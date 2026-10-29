@@ -167,8 +167,8 @@ public class consularVentasEDSCaes {
                     +"tns.formaPago.transferencia=90\r\n"
                     +"tns.formaPago.datafono=TDG\r\n"
                     +"tns.formaPago.tarjeta=TDG\r\n"
-                    +"# codigo TNS del efectivo (necesario cuando una venta mezcla efectivo con otra forma de pago)\r\n"
-                    +"tns.formaPago.efectivo=\r\n"
+                    +"# codigo TNS del efectivo (se usa cuando una venta mezcla efectivo con otra forma de pago)\r\n"
+                    +"tns.formaPago.efectivo=4\r\n"
                     +"tns.talla=00\r\n"
                     +"tns.color=00\r\n"
                     +"tns.banco=00\r\n"
@@ -1155,7 +1155,7 @@ public class consularVentasEDSCaes {
         return new java.math.BigDecimal(total).divide(new java.math.BigDecimal(String.valueOf(cantidad)), 6, java.math.RoundingMode.HALF_UP).doubleValue();
     }
     /**
-     * Carga los codigos TNS de forma de pago: los de la empresa (TD, 3, 90, TDG) mas los que se
+     * Carga los codigos TNS de forma de pago: los de la empresa (TD, 3, 90, TDG, efectivo 4) mas los que se
      * configuren en caes.properties con tns.formaPago.<texto>=<codigo>. Se ordenan del texto mas largo
      * al mas corto para que "tarjeta debito" se evalue antes que "tarjeta".
      */
@@ -1168,6 +1168,7 @@ public class consularVentasEDSCaes {
         leidas.put("transferencia", "90");
         leidas.put("datafono", "TDG");
         leidas.put("tarjeta", "TDG");
+        leidas.put("efectivo", "4");
         for (String llave : config.stringPropertyNames()) {
             if(llave.toLowerCase().startsWith("tns.formapago.")){
                 String texto=SinTildes(llave.substring("tns.formaPago.".length()));
