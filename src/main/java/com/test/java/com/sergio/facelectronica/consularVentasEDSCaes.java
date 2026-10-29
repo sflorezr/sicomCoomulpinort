@@ -83,6 +83,9 @@ public class consularVentasEDSCaes {
     static String bancoTNS="00";
     // talla y color en ventas y remisiones: VACIO (envia ""), NULL (envia null), S (envia tns.talla/tns.color) o N (no los envia)
     static String enviarTallaColor="VACIO";
+    // codigos de forma de pago de TNS para ventas multiples (MU): texto de la forma de pago de la
+    // estacion (minusculas, sin tildes) -> codigo TNS. Se configuran con tns.formaPago.<texto>=<codigo>
+    static java.util.LinkedHashMap<String,String> formasPagoTNS=new java.util.LinkedHashMap<>();
     private static String centroCosto="00";
     private static String prefijo="FE";
     private static String prefijoRemision="PO";
@@ -157,6 +160,15 @@ public class consularVentasEDSCaes {
                     +"# talla y color: se usan en las devoluciones (ReversarVentasPO); en ventas y\r\n"
                     +"# remisiones: VACIO los envia como \"\", NULL en null, S envia tns.talla/tns.color, N no los envia\r\n"
                     +"tns.enviarTallaColor=VACIO\r\n"
+                    +"# codigos TNS de forma de pago para ventas multiples (texto de la estacion=codigo TNS)\r\n"
+                    +"tns.formaPago.tarjeta debito=TD\r\n"
+                    +"tns.formaPago.tarjeta credito=3\r\n"
+                    +"tns.formaPago.consignacion=90\r\n"
+                    +"tns.formaPago.transferencia=90\r\n"
+                    +"tns.formaPago.datafono=TDG\r\n"
+                    +"tns.formaPago.tarjeta=TDG\r\n"
+                    +"# codigo TNS del efectivo (necesario cuando una venta mezcla efectivo con otra forma de pago)\r\n"
+                    +"tns.formaPago.efectivo=\r\n"
                     +"tns.talla=00\r\n"
                     +"tns.color=00\r\n"
                     +"tns.banco=00\r\n"
@@ -205,6 +217,7 @@ public class consularVentasEDSCaes {
         color=config.getProperty("tns.color","00").trim();
         bancoTNS=config.getProperty("tns.banco","00").trim();
         enviarTallaColor=config.getProperty("tns.enviarTallaColor","VACIO").trim().toUpperCase();
+        CargarFormasPagoTNS();
         mostrarGenerarJson=!config.getProperty("opciones.generarJson","S").trim().equalsIgnoreCase("N");
         prefijo=config.getProperty("tns.prefijo","FE").trim();
         prefijoRemision=config.getProperty("tns.prefijoRemision","PO").trim();
@@ -657,6 +670,7 @@ public class consularVentasEDSCaes {
             +"\nProducto: "+(producto!=null ? producto.optString("Nombre").trim() : "")
             +"\nTotal: $"+String.format("%,.2f", total)
             +"\nForma de pago: "+FormasDePago(venta)+" (banco "+BancoDeFormaPago(venta)+")"
+            +"\nForma de pago TNS: "+FormaPagoTNSTexto(venta)
             +"\n\nSe subira como "+(EsVentaCredito(venta) ? "REMISION (credito) prefijo "+prefijoRemision : "FACTURA prefijo "+prefijo);
     }
     private static String FormasDePago(JSONObject venta){
@@ -1140,6 +1154,108 @@ public class consularVentasEDSCaes {
         }
         return new java.math.BigDecimal(total).divide(new java.math.BigDecimal(String.valueOf(cantidad)), 6, java.math.RoundingMode.HALF_UP).doubleValue();
     }
+    /**
+     * Carga los codigos TNS de forma de pago: los de la empresa (TD, 3, 90, TDG) mas los que se
+     * configuren en caes.properties con tns.formaPago.<texto>=<codigo>. Se ordenan del texto mas largo
+     * al mas corto para que "tarjeta debito" se evalue antes que "tarjeta".
+     */
+    static void CargarFormasPagoTNS(){
+        // codigos de la empresa por defecto; caes.properties los complementa o los cambia
+        Map<String,String> leidas=new HashMap<>();
+        leidas.put("tarjeta debito", "TD");
+        leidas.put("tarjeta credito", "3");
+        leidas.put("consignacion", "90");
+        leidas.put("transferencia", "90");
+        leidas.put("datafono", "TDG");
+        leidas.put("tarjeta", "TDG");
+        for (String llave : config.stringPropertyNames()) {
+            if(llave.toLowerCase().startsWith("tns.formapago.")){
+                String texto=SinTildes(llave.substring("tns.formaPago.".length()));
+                String codigo=config.getProperty(llave).trim();
+                if(!texto.isEmpty() && !codigo.isEmpty()){
+                    leidas.put(texto, codigo);
+                }
+            }
+        }
+        formasPagoTNS.clear();
+        leidas.entrySet().stream()
+            .sorted((a, b) -> b.getKey().length()-a.getKey().length())
+            .forEach(e -> formasPagoTNS.put(e.getKey(), e.getValue()));
+    }
+    /**
+     * Codigo TNS de una forma de pago de la estacion, o null si no esta configurado.
+     */
+    static String CodigoFormaPagoTNS(String formaPago){
+        String forma=SinTildes(formaPago);
+        for (Map.Entry<String,String> e : formasPagoTNS.entrySet()) {
+            if(forma.contains(e.getKey())){
+                return e.getValue();
+            }
+        }
+        return null;
+    }
+    /**
+     * Es venta multiple (MU) si no es remision y tiene algun pago que no es efectivo
+     * (tarjeta debito, tarjeta credito, consignacion/transferencia...). Solo efectivo es contado.
+     */
+    static boolean EsVentaMultiple(JSONObject sale){
+        if(EsVentaCredito(sale)){
+            return false;
+        }
+        JSONArray pagos=sale.optJSONArray("Pagos");
+        if(pagos==null){
+            return false;
+        }
+        for (int j = 0; j < pagos.length(); j++) {
+            JSONObject pago=pagos.optJSONObject(j);
+            if(pago!=null && !SinTildes(pago.optString("FormaPago")).contains("efectivo")){
+                return true;
+            }
+        }
+        return false;
+    }
+    /**
+     * Renglones de forma de pago para una venta MU: codigo TNS -> valor (suma los pagos del mismo codigo).
+     * Si algun pago no tiene codigo configurado devuelve null y deja la forma en faltantes.
+     */
+    static java.util.LinkedHashMap<String,Double> DetalleFormasPagoTNS(JSONObject sale,List<String> faltantes){
+        java.util.LinkedHashMap<String,Double> detalle=new java.util.LinkedHashMap<>();
+        JSONArray pagos=sale.optJSONArray("Pagos");
+        for (int j = 0; pagos!=null && j < pagos.length(); j++) {
+            JSONObject pago=pagos.optJSONObject(j);
+            if(pago==null){
+                continue;
+            }
+            String codigo=CodigoFormaPagoTNS(pago.optString("FormaPago"));
+            if(codigo==null){
+                faltantes.add(pago.optString("FormaPago"));
+                continue;
+            }
+            detalle.merge(codigo, pago.optDouble("Valor", 0), Double::sum);
+        }
+        return faltantes.isEmpty() ? detalle : null;
+    }
+    /**
+     * Texto de la forma de pago con que se enviara a TNS (para la confirmacion).
+     */
+    static String FormaPagoTNSTexto(JSONObject venta){
+        if(EsVentaCredito(venta)){
+            return "CR (remision)";
+        }
+        if(!EsVentaMultiple(venta)){
+            return "CO (contado)";
+        }
+        List<String> faltantes=new ArrayList<>();
+        java.util.LinkedHashMap<String,Double> detalle=DetalleFormasPagoTNS(venta, faltantes);
+        if(detalle==null){
+            return "MU (multiple) - FALTA CODIGO TNS PARA: "+String.join(", ", faltantes);
+        }
+        List<String> partes=new ArrayList<>();
+        for (Map.Entry<String,Double> e : detalle.entrySet()) {
+            partes.add(e.getKey()+" $"+String.format("%,.2f", e.getValue()));
+        }
+        return "MU (multiple): "+String.join(" + ", partes);
+    }
     public static Boolean SubirVenta(JSONObject sale) throws IOException{
         String teridString=ConsultarTerid(sale,"cliente");  
         String vendedorIdString=ConsultarTerid(sale, "vendedor");
@@ -1173,6 +1289,18 @@ public class consularVentasEDSCaes {
             rutaDocumento="/v2/Facturacion/Remision/Crear";
         }
         String banco=BancoDeFormaPago(sale);
+        // tarjeta debito/credito y consignacion/transferencia -> forma de pago multiple (MU)
+        java.util.LinkedHashMap<String,Double> detalleMultiple=null;
+        if(!esRemision && EsVentaMultiple(sale)){
+            List<String> faltantes=new ArrayList<>();
+            detalleMultiple=DetalleFormasPagoTNS(sale, faltantes);
+            if(detalleMultiple==null){
+                GuardarLog("EL RECIBO "+recibo+" NO SE SUBE: FALTA EL CODIGO TNS DE LA FORMA DE PAGO "+String.join(", ", faltantes)
+                    +" (configurelo en "+ARCHIVOCONFIG+" como tns.formaPago.<forma>=<codigo>)");
+                return false;
+            }
+            formapago="MU";
+        }
         String fechaVentaString=sale.getString("HoraFin").split("T")[0];
         fechaVentaString=fechaVentaString.substring(8, 10)+'/'+fechaVentaString.substring(5, 7)+'/'+fechaVentaString.substring(0, 4);
         String matidString=BuscarMaterialAPI(sale.getJSONObject("Producto").getString("Nombre"));
@@ -1226,12 +1354,25 @@ public class consularVentasEDSCaes {
         itempedido.addProperty("observacion", "");
         itemsPedido.add(itempedido);
         venta.add("detallePedido", itemsPedido);
-        itemformapago.addProperty("codigoFormaPago", formapago);
-        itemformapago.addProperty("plazoDias", plazoDias);
-        itemformapago.addProperty("fechaVencimiento", fechaVentaString);
-        itemformapago.addProperty("centroCosto", centroCosto);
-        itemformapago.addProperty("valor", String.valueOf(totalVenta));
-        itemsFormaPago.add(itemformapago);
+        if(detalleMultiple!=null){
+            // un renglon por cada forma de pago TNS
+            for (Map.Entry<String,Double> e : detalleMultiple.entrySet()) {
+                JsonObject renglon=new JsonObject();
+                renglon.addProperty("codigoFormaPago", e.getKey());
+                renglon.addProperty("plazoDias", "0");
+                renglon.addProperty("fechaVencimiento", fechaVentaString);
+                renglon.addProperty("centroCosto", centroCosto);
+                renglon.addProperty("valor", String.valueOf(e.getValue()));
+                itemsFormaPago.add(renglon);
+            }
+        }else{
+            itemformapago.addProperty("codigoFormaPago", formapago);
+            itemformapago.addProperty("plazoDias", plazoDias);
+            itemformapago.addProperty("fechaVencimiento", fechaVentaString);
+            itemformapago.addProperty("centroCosto", centroCosto);
+            itemformapago.addProperty("valor", String.valueOf(totalVenta));
+            itemsFormaPago.add(itemformapago);
+        }
         venta.add("detalleFormaPago", itemsFormaPago);
         // serializeNulls para que los campos en null (talla/color) si viajen en el JSON
         Gson gson = new GsonBuilder().setPrettyPrinting().serializeNulls().create();
@@ -1260,7 +1401,7 @@ public class consularVentasEDSCaes {
             factura=datos.optString("consecutivo").trim();
         }
         RegistrarReciboSubido(sale, fechaVentaString, prefijoDocumento+factura);
-        GuardarLog("RECIBO "+recibo+" SUBIDO A TNS COMO "+tipoDocumento+" "+prefijoDocumento+factura);
+        GuardarLog("RECIBO "+recibo+" SUBIDO A TNS COMO "+tipoDocumento+" "+prefijoDocumento+factura+" FORMA DE PAGO "+formapago);
         return true;
     }
 
