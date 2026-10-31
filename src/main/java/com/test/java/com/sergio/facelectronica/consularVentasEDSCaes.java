@@ -1196,24 +1196,11 @@ public class consularVentasEDSCaes {
         return null;
     }
     /**
-     * Es venta multiple (MU) si no es remision y tiene algun pago que no es efectivo
-     * (tarjeta debito, tarjeta credito, consignacion/transferencia...). Solo efectivo es contado.
+     * Todas las facturas de venta se envian con forma de pago multiple (MU), incluidas las de solo
+     * efectivo. Solo las remisiones (Credito Ilimitado) quedan a credito.
      */
     static boolean EsVentaMultiple(JSONObject sale){
-        if(EsVentaCredito(sale)){
-            return false;
-        }
-        JSONArray pagos=sale.optJSONArray("Pagos");
-        if(pagos==null){
-            return false;
-        }
-        for (int j = 0; j < pagos.length(); j++) {
-            JSONObject pago=pagos.optJSONObject(j);
-            if(pago!=null && !SinTildes(pago.optString("FormaPago")).contains("efectivo")){
-                return true;
-            }
-        }
-        return false;
+        return !EsVentaCredito(sale);
     }
     /**
      * Renglones de forma de pago para una venta MU: codigo TNS -> valor (suma los pagos del mismo codigo).
@@ -1234,6 +1221,11 @@ public class consularVentasEDSCaes {
             }
             detalle.merge(codigo, pago.optDouble("Valor", 0), Double::sum);
         }
+        // venta sin pagos: un solo renglon de efectivo por el total
+        if(detalle.isEmpty() && faltantes.isEmpty()){
+            String efectivo=CodigoFormaPagoTNS("efectivo");
+            detalle.put(efectivo!=null ? efectivo : "4", TotalPagado(sale));
+        }
         return faltantes.isEmpty() ? detalle : null;
     }
     /**
@@ -1242,9 +1234,6 @@ public class consularVentasEDSCaes {
     static String FormaPagoTNSTexto(JSONObject venta){
         if(EsVentaCredito(venta)){
             return "CR (remision)";
-        }
-        if(!EsVentaMultiple(venta)){
-            return "CO (contado)";
         }
         List<String> faltantes=new ArrayList<>();
         java.util.LinkedHashMap<String,Double> detalle=DetalleFormasPagoTNS(venta, faltantes);
@@ -1290,7 +1279,7 @@ public class consularVentasEDSCaes {
             rutaDocumento="/v2/Facturacion/Remision/Crear";
         }
         String banco=BancoDeFormaPago(sale);
-        // tarjeta debito/credito y consignacion/transferencia -> forma de pago multiple (MU)
+        // todas las facturas van con forma de pago multiple (MU), un renglon por forma de pago TNS
         java.util.LinkedHashMap<String,Double> detalleMultiple=null;
         if(!esRemision && EsVentaMultiple(sale)){
             List<String> faltantes=new ArrayList<>();
